@@ -251,6 +251,199 @@ scriptSig はちょっと注意が必要で、OP_CHECKMULTISIG の実装にバ�
 
 さて、ここで思い出してください。UTXO set の肥大化を抑えたいので、
 scriptPubKey は小さくしたい。ところがどうでしょう。
-この scriptPubKey は 1 つで 33Byte ある公開鍵のおばけです。
+この scriptPubKey は公開鍵 1 つで 33Byte ある公開鍵のおばけです。
 
 これをなんとかしたい、というわけで今回のお話が始まります。
+
+== 本編に入る前に
+
+ここまでの説明が、bitcoin の元実装となります。
+
+この頃の Script は、不正な動作を防ぐためにあえてチューリング完全に
+ならないように設計されており、与えられた命令を順番に実行するだけの、
+本当に素直な、仮想マシンでしかありませんでした。
+
+本当に、普通の、ただのスタック型仮想マシンだったんです……
+
+== scriptPubKey を縮小する試み
+
+さて、マルチシグでは scriptPubKey が肥大化しがちという問題がありました。
+
+ここから P2SH (pay-to-script-hash) が採用されるまでの流れを追っていきたいと思います。
+
+=== エントリーナンバー１．BIP-12 - OP_EVAL を導入しよう！
+
+2011/10/18、BIP (Bitcoin Improvement Proposals) という bitcoin の改善提案の
+No.12 として、OP_EVAL の導入が提案されました。
+
+新たに redeem script という概念を導入します。
+
+//list[BIP12][BIP-12]{
+redeem script:
+1. OP_PUSH 2
+2. OP_PUSH <公開鍵１>
+3. OP_PUSH <公開鍵２>
+4. OP_PUSH <公開鍵３>
+5. OP_PUSH 3
+6. OP_CHECKMULTISIG
+scriptSig:
+1. OP_PUSH 0
+2. OP_PUSH <電子署名１>
+3. OP_PUSH <電子署名２>
+4. OP_PUSH <redeem script>
+scriptPubKey:
+1. OP_DUP
+2. OP_HASH160
+3. OP_PUSH <redeem script のハッシュ値>
+4. OP_EQUALVERIFY
+5. OP_EVAL
+//}
+
+おわかりでしょうか？redeem script をあらかじめ構築しておき、
+scriptSig の最後で、redeem script の機械語をデータとして PUSH しています。
+
+scriptPubKey ではまずその redeem script をコピーしておいてから、
+そのハッシュ値を求め、scriptPubKey に記載されているハッシュ値と比較します。
+つまり、scriptPubKey で規定した redeem script であることを確認するわけですね。
+OP_EQUALVERIFY なので、一致しない場合はそこで実行失敗扱いになります。
+
+最後に、OP_EVAL で先ほどコピーした redeem script を実行します。
+スタックには scriptSig で先に PUSH してある電子署名が載っているので、
+OP_CHECKMULTISIG は問題なく成功します。
+
+これで、マルチシグの公開鍵がいくつに増えても、scriptPubKey は 24Byte で固定されます。
+格段に縮小されましたね。scriptSig がその分肥大化しますが、こちらは大した問題ではありません。
+
+=== エントリーナンバー２．BIP-16 - 仮想マシンを魔改造しよう！
+
+2012/01/03、かなりトリッキーな手法が提案されました。
+
+まずは提案されたプログラムを見てみましょう。
+
+//list[BIP16][BIP-16]{
+redeem script:
+1. OP_PUSH 2
+2. OP_PUSH <公開鍵１>
+3. OP_PUSH <公開鍵２>
+4. OP_PUSH <公開鍵３>
+5. OP_PUSH 3
+6. OP_CHECKMULTISIG
+scriptSig:
+1. OP_PUSH 0
+2. OP_PUSH <電子署名１>
+3. OP_PUSH <電子署名２>
+4. OP_PUSH <redeem script>
+scriptPubKey:
+1. OP_HASH160
+2. OP_PUSH <redeem script のハッシュ値>
+3. OP_EQUAL
+//}
+
+redeem script と scriptSig は BIP-12 と同じですが、scriptPubKey がシンプルになっています。
+なぜ、これで正常に動作するのでしょうか？
+
+BIP-16 はかなりアグレッシブな提案で、なんと仮想マシンの処理系に手を加えることを提案しています。
+
+scriptPubKey が、OP_HASH160 - OP_PUSH (20Byte) - OP_EQUAL の３つの組み合わせから成り立つ場合に限り、
+最後まで実行しきった後、scriptSig 実行直後の状態を復元し、スタックトップをプログラムとみなして
+実行を継続する。という提案です。
+
+つまり、まずは scriptSig を実行します。すると電子署名と redeem script がスタックに乗ります。
+次に scriptPubKey を実行します。スタックトップの redeem script のハッシュ値を計算して、
+scriptPubKey に記載されているハッシュ値と一致することを確認します。
+これで redeem script が正しいものであると確認できます。
+
+そして、scriptPubKey が規定のフォーマットに沿っているため、追加の処理をします。
+scriptSig 実行直後の状態、つまり電子署名と redeem script がスタックに乗っている状態を復元して、
+スタックトップにある redeem script をプログラムとして実行します。
+そこで公開鍵がスタックに積まれ、OP_CHECKMULTISIG が実行される、と。
+
+な、なんだそれは……アクロバティック過ぎる……
+
+おまえ、それ本気で言ってんの？
+
+=== エントリーナンバー３．BIP-17 - いっそ専用の命令を追加しよう！
+
+2012/01/18、さらに別の提案がなされます。
+
+ここまでくればもう何でもアリなんでしょうか。
+
+とりあえず提案内容を見てみましょう。
+
+//list[BIP17][BIP-17]{
+scriptSig:
+1. OP_PUSH 0
+2. OP_PUSH <電子署名１>
+3. OP_PUSH <電子署名２>
+4. OP_CODESEPARATOR
+ - ここから下が redeem script
+5. OP_PUSH 2
+6. OP_PUSH <公開鍵１>
+7. OP_PUSH <公開鍵２>
+8. OP_PUSH <公開鍵３>
+9. OP_PUSH 3
+10. OP_CHECKMULTISIG
+scriptPubKey:
+1. OP_PUSH <redeem script のハッシュ値>
+2. OP_CHECKHASHVERIFY
+3. OP_DROP
+//}
+
+新しく出てきた OP_CODESEPARATOR は、プログラムの区切りを示す命令で、
+特に何もしません。NOP です。
+
+提案された OP_CHECKHASHVERIFY (CHV) は、scriptSig の OP_CODESEPARATOR 以降のハッシュ値を求めて、
+それをスタックトップと比較して、一致しない場合は実行失敗とする命令です。
+OP_CHECKHASHVERIFY に割り当てる命令コードは、元々 OP_NOP2 として何もしないことになっているので、
+古い実装でも問題なく受け付けることができるように、スタックトップはそのまま残します。
+
+まずは scriptSig を実行します。普通に電子署名と公開鍵をスタックに積んで OP_CHECKMULTISIG を
+実行します。そして次に scriptPubKey で redeem script のハッシュ値をスタックに積んでから、
+例の OP_CHECKHASHVERIFY 命令を実行します。scriptSig の OP_CODESEPARATOR 以降、
+つまり 5-10 の機械語データのハッシュ値を求めて、スタックトップと比較検証します。
+そして、スタックトップに残っているハッシュ値を捨てて完了です。
+
+おぅ……もうこれはこの用途にしか使えない、完全に専用の命令ですな……
+
+== さて、勝敗やいかに！？
+
+この３つの提案のうち、実際に P2SH として採用されたのは、
+エントリーナンバー２番、仮想マシンに魔改造を加える、でした！
+
+えっ……？
+
+……えっっ！？！？
+
+なぜ、この選択肢が選ばれたのか、理由はそれぞれの BIP に書かれています。
+
+いずれの変更も、bitcoin プログラムのバージョンによって受け入れの可否が異なる場合があります。
+その場合、意図せずブロックチェーンが分岐してしまう恐れがありました。
+
+そのため、どの BIP にも採択の条件を記載してあります。
+それは、PoW な bitcoin ではハッシュレートこそパワーである！というわけで、
+ハッシュレート比で 50% 以上の賛同があれば採択とする。というわけです。
+
+具体的には、マイニングをしているユーザに、
+「マイニング成功したブロックに唯一存在する、coinbase トランザクションの、
+coinbase 領域に“OP_EVAL”“/P2SH/”“p2sh/CHV”の文字列を記載してもらう」
+ことを依頼しました。
+
+そして、一定期間中に掘られたブロックの coinbase トランザクションの統計を取り、
+50% を超えた BIP-16 が採択された、というわけです。
+
+なぜ BIP-16 が選ばれたのか、それはマイナーたちとコミュニティそれぞれの考えが
+あることでしょうから、一概には言えません。たまたま BIP-16 推しのユーザが
+大きなハッシュレートを持っていたのかもしれません。
+
+ただ OP_EVAL 案。これは比較的わかりやすくて、ループが作れるようになるため、
+チューリング完全な言語になってしまう。そうすると静的解析が難しくなるため、
+否定的な意見があったそうです。
+
+bitcoin コミュニティはチューリング完全に親を殺されたのでしょうか。
+
+== そんなわけで
+
+そんなこんなで、BIP-12 と BIP-17 は取り下げ扱いとなり、
+今日に至るまで、BIP-16 が P2SH の標準として認められることとなりました。
+
+心から思う。本当に、本当にこんな魔改造で良いの？？良かったの！？と。
