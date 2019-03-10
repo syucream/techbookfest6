@@ -36,12 +36,132 @@ libfuse にはハイレベル API とローレベル API が存在します。
 == C++ ではじめる FUSE
 
 さて、いきなり Rust で libfuse を ffi を使って利用するコードを実装し始めてもいいのですが、 ffi を使う上で C, C++ として利用する構造体や関数などがどのような構成になっているかを知ることは重要になります。
-ここでは C++ で Hello, World! を表示するだけのシンプルな FUSE アプリケーションを作ってみましょう。
+ここでは C++ で "Hello, World!" を表示するだけのシンプルな FUSE アプリケーションを作ってみましょう。
+（C ではなく  C++ を用いる強い理由はありません。単純に C のサンプルは既に数多く Web 上にあるため参考として C++ で実装してみた次第です）
 
 === Hello, FUSE! in C++
 
+C++ で実装した、最低限 "Hello, World!" をコンソール上で表示でき、ファイルシステムとして動作しているように見えるコードが以下のようになります。
+
+//source[hello.cpp]{
+#include <cerrno>
+#include <fuse.h>
+#include <string>
+
+using std::string;
+
+constexpr auto STAT_SIZE = sizeof(struct stat);
+const auto HELLO_CONTENT = string("Hello, World!");
+const auto HELLO_CONTENT_LEN = HELLO_CONTENT.length();
+const auto HELLO_PATH = string("/hello");
+
+static int hello_getattr(const char *path, struct stat *stbuf) {
+  const auto path_str = string(path);
+
+  memset(stbuf, 0, STAT_SIZE);
+
+  if (path_str == "/") {
+    stbuf->st_mode = S_IFDIR | 0755;
+    stbuf->st_nlink = 2;
+    return 0;
+  } else if (path_str == HELLO_PATH) {
+    stbuf->st_mode = S_IFREG | 0444;
+    stbuf->st_nlink = 1;
+    stbuf->st_size = HELLO_CONTENT_LEN;
+    return 0;
+  } else {
+    return -ENOENT;
+  }
+}
+
+static int hello_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                         off_t offset, struct fuse_file_info *fi) {
+  const auto path_str = string(path);
+
+  if (path_str != "/") {
+    return -ENOENT;
+  }
+
+  filler(buf, ".", nullptr, 0);
+  filler(buf, "..", nullptr, 0);
+  filler(buf, HELLO_PATH.c_str() + 1, nullptr, 0);
+
+  return 0;
+}
+
+static int hello_open(const char *path, struct fuse_file_info *fi) {
+  const auto path_str = string(path);
+
+  if (path_str != HELLO_PATH) {
+    return -ENOENT;
+  }
+
+  return 0;
+}
+
+static int hello_read(const char *path, char *buf, size_t size, off_t offset,
+                      struct fuse_file_info *fi) {
+  const auto path_str = string(path);
+
+  if (path_str != HELLO_PATH) {
+    return -ENOENT;
+  }
+
+  if (offset < HELLO_CONTENT_LEN) {
+    if (offset + size > HELLO_CONTENT_LEN) {
+      size = HELLO_CONTENT_LEN - offset;
+    }
+    std::memcpy(buf, HELLO_CONTENT.c_str() + offset, size);
+  } else {
+    size = 0;
+  }
+
+  return size;
+}
+
+static struct fuse_operations hello_oper = {.getattr = hello_getattr,
+                                            .readdir = hello_readdir,
+                                            .open = hello_open,
+                                            .read = hello_read};
+
+int main(int argc, char *argv[]) {
+  fuse_main(argc, argv, &hello_oper, nullptr);
+}
+//}
+
+実装した FUSE のコールバック関数としては getattr, readdir, open, read の 4 種類だけです。これ以外のコールバック関数の実装が必要な操作、例えば書き込みを行うと未実装である旨のエラーが返却されます。
+
 === FUSE アプリケーションの動作確認方法
 
+このサンプルをコンパイルする時には例えば以下のようにします。
+このサンプルでは constexpr や auto など C++11 以降の機能を使っているため、 --std=c++0x のように C++11 以降を使うことを明示します。
+また FUSE のバージョンは今回は筆者の環境では 29 を指定しました。
+FUSE の共有ライブラリとヘッダのパスですが、 pkg-config を介して指定します。
+pkg-config を用いることは必須では無いのですが、特に macOS を用いる場合は osxfuse のパスを指定する必要があるなど手動指定だとハマりどころが多いため、 pkg-config を用いてしまうのがシンプルで済むと思われます。
+余談ですが libfuse と osxfuse はシグネチャとしてはほぼ同じになり、内容によっては osxfuse にリンクする想定のはずが libfuse にリンクしてしまえる場合があります。
+筆者はそれに気づかず多少の時間を無駄に費やしました。。。
+
+//cmd{
+$ g++ -Wall hello.cpp --std=c++0x -DFUSE_USE_VERSION=29 `pkg-config fuse --cflags --libs` -o hello
+//}
+
+次にこの hello ファイルシステムを実際にマウントしてみます。
+ここでは適当に tmp ディレクトリを作成し、それにマウントしてみました。
+ここでデバッグを容易にするため -d オプションも付与しています。
+-d を付与することで、ファイルシステムへ発行されているオペレーションとそれに対する結果を出力してもらえます。
+
+//cmd{
+$ mkdir tmp
+$ ./hello -d tmp
+//}
+
+最後に想定されるファイルパス "/hello" に cat コマンドでアクセスしてみます。
+上手く行っていれば "Hello, World!" と表示されると思われます。
+
+//cmd{
+$ cat tmp/hello
+Hello, World!
+//}
 
 == RUST でやるFUSE
 
