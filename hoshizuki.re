@@ -275,7 +275,7 @@ scriptPubKey は小さくしたい。ところがどうでしょう。
 
 OP_CHECKMULTISIG は、スタックが以下の状態になっていることを想定して動作します。
 
-//table[MSIG_STACK][OP_CHECKMULTISIG 実行直前のスタック]{
+//list[MSIG_STACK][OP_CHECKMULTISIG 実行直前のスタック]{
 公開鍵の個数（今回は３）
 公開鍵３
 公開鍵２
