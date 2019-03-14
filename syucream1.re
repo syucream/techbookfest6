@@ -1,14 +1,17 @@
 = Rust で ffi で FUSE ライブラリを自作する
 
+こんにちは、はじめまして、 @syu_cream です。
+好きなスイーツはおはぎです。
+この記事では Rust でコーディングした結果をつらつら書いていって、ハマった点やあまり Web で見られないノウハウについてお伝えできればと思っています。
 
 == はじめに
 
-Rust は FireFox などの開発元としてよく知られる Mozilla が開発しているモダンな言語です。
-モダンな言語だけあって、最近台頭してきた言語によくあるような、パターンマッチや null 安全な型 Option 、エラーが起こるかもしれないことを表現する型 Result  などの機能が存在します。
+Rust は FireFox などの開発元としてよく知られる Mozilla が開発しているモダンなプログラミング言語です。
+新し目のプログラミング言語なだけあって、最近台頭してきた言語によくあるような、パターンマッチや null 安全な型 Option 、エラーが起こるかもしれないことを表現する型 Result  などの機能が存在します。
 また Rust の特徴的な機能として、デフォルトムーブな変数所有権の扱いや借用、コンパイル時のレースコンディションのチェック、変数のライフタイムの管理、シンプルな ffi による C, C++ 関数の呼び出し、unsafe ブロックによる柔軟で明示的な危険な操作(ポインタのデリファレンスや C, C++関数呼び出しなど)も存在します。
 これらの機能により、 C, C++ などより安全にシステムプログラミングが可能であり、かつ既存の C, C++ の資産を利用可能なプログラミング言語であると言えます。
 
-本記事では Rust でffi するコードを書いてみます。
+本記事では Rust で ffi で C, C++ の資産を利用するコードを書いてみます。
 ここでは FUSE(Filesystem in UserSpace) のライブラリである libfuse のハイレベル API のラッパーライブラリを作ってみます。
 
 
@@ -574,9 +577,361 @@ Hello, World!
 
 ==== yarf crate の実装
 
+無事にサンプルが動作した yarf-sys クレートですが、ポインタの取り回しやそれ起因で unsafe ブロックが多用されている状態です。
+またコールバック関数をひたすら並べるという C++ で libfuse を直接使っていた時と状況が変わっていないのがいまいちイケていません。
+yarf クレートではもう少し抽象化し、またある程度利用者が unsafe ブロックを書かずに済むようにしましょう。
+
+ここでは rust-fuse を参考にして、 libfuse のコールバック関数を trait として宣言しておいて、その各メソッドを実装することでファイルシステムが実装可能な状態を目指してみます。
+またこの trait が受け付ける引数にはなるべくポインタをそのまま渡さないことを考えます。
+これにより以下のようなコードを書ける状態を目標に掲げます。
+
+//source[fs_trait.rs]{
+// ファイルシステムを表現する trait
+pub trait FileSystem {
+
+  // 各コールバック関数は trait のメソッドとして実装していく
+  fn getattr(&self, _path: String, _stbuf: Option<&mut stat>) -> c_int {
+      -libc::ENOSYS
+  }
+
+  ...
+}
+
+...
+
+// ファイルシステム trait を実装する構造体
+struct HelloFS;
+
+// 各コールバック関数を実装していく
+impl FileSystem for HelloFS {
+    fn getattr(&self, path: String, stbuf: Option<&mut stat>) -> c_int {
+        match path.as_str() {
+            "/" => {
+            ...
+//}
+
+==== yarf でのコールバック関数
+
+まず yarf-sys を使って libfuse からのコールバックを受け付ける関数を定義していきます。
+ここでは単純に <FUSEの操作名>_proxy という関数をひたすら地道に生やしていくことにします。
+これらのコールバック関数が、前述した trait のメソッドを呼び出してくれるように作ろうと思います。
+
+ここは特に Hello, World! サンプルと大した差分も無く、ハマる事がありません。
+
+//source[yarf_callbacks.rs]{
+extern "C" fn getattr_proxy(path: *const c_char, stbuf: *mut stat) -> c_int {
+  ...
+}
+
+extern "C" fn readlink_proxy(
+    path: *const ::std::os::raw::c_char,
+    buf: *mut ::std::os::raw::c_char,
+    size: usize,
+) -> ::std::os::raw::c_int {
+  ...
+}
+
+...
+//}
+
+このコールバック関数を fuse_operations 構造体に詰めて、 yarf-sys クレートの fuse_main_real() に渡すようにします。
+
+//source[yarf_entrypoint.rs]{
+let ops = fuse_operations {
+    getattr: Some(getattr_proxy),
+    readlink: Some(readlink_proxy),
+    ...
+}
+...
+
+// この後は Hello, World! サンプルとほぼ一緒
+//}
+
+==== FileSystem trait を実装する構造体の引き回し
+
+コールバック関数が呼び出された後に悩ましいのが、どのように FileSystem trait を実装する構造体を取り出すかです。
+コールバック関数は C で実装された libfuse を介して呼び出されますし、引数に任意のパラメータを取る仕組みも無さそうです。
+yarf クレートのモジュールのどこかでグローバル変数として格納してもいいかもしれませんが、もう少し綺麗な取り回しを考えたくも思います。
+
+今回は libfuse で定義される構造体のうち fuse_context と、それを操作する関数を使用してみようと思います。
+fuse_context は以下のように void* の private_data という任意のデータをメンバとして持ちます。
+
+//source[fuse_context.c]{
+struct fuse_context {
+  struct fuse* fuse;
+  uid_t uid;
+  gid_t gid;
+  pid_t pid;
+  void* private_data;
+};
+//}
+
+private_data は fuse_main_real() の第五引数として渡した void* の値がそのままセットされます。
+なお、もし init コールバックを実装した場合は、この関数の戻り値が上書きされることになります。
+private_data を参照する際は fuse_get_context() を呼び出せば OK です。
+
+これらを利用して Rust で FileSystem trait を実装する構造体を引き回すコードを以下のようにします。
+
+//source[fuse_context_fs.rs]{
+// fuse_context をセットする側
+...
+let fstmp = Box::new(fs);
+let fsptr = Box::into_raw(fstmp) as *mut Box<FileSystem> as *mut c_void;
+
+// call fuse_main
+unsafe {
+    yarf_sys::fuse_main_real(
+        c_args.len() as c_int,
+        c_args.as_ptr() as *mut *mut c_char,
+        &ops,
+        opsize,
+        fsptr,
+    )
+};
+...
+
+// fuse_context を参照する側
+fn get_filesystem() -> Option<Box<FileSystem>> {
+    let ctx = unsafe { yarf_sys::fuse_get_context() };
+    if ctx.is_null() {
+        return None;
+    }
+
+    let fsbox = unsafe { (*ctx).private_data as *mut Box<FileSystem> };
+    if fsbox.is_null() {
+        return None;
+    }
+
+    let actual = unsafe { fsbox.read() };
+    Some(actual)
+}
+//}
+
+これで Rust で記述された FileSystem trait の実装を取ることができるようになりました。
+
+==== unsafe な処理の隠蔽
+
+取り出した FileSystem trait のメソッドには、なるべく Rust フレンドリーで安全な値を渡してあげたいものです。
+ここでは幾つかの場合に分けて、 yarf クレート側で unsafe な処理をしてあげることにします。
+ここでは *const c_char な値の扱い、 *mut な値の扱い、バッファの扱い、関数ポインタの扱いの四種類をピックアップしていきます。
+
+*const c_char 型の値はかなり多く、 yarf-sys というか libfuse ハイレベル API の第一引数のほとんどがこれです。
+実体は NULL 終端されたファイルパスやファイル名の文字列です。
+今回はこれらを Rust の String 型として扱います。
+この操作は危険ではあるものの、 libfuse がぶっ壊れたポインタを渡してこないことを信じて unsafe で囲んで操作して変換しておきます。
+
+//source[to_string.rs]{
+fn to_rust_str(cpath: *const c_char) -> String {
+    let path_cstr = unsafe { CStr::from_ptr(cpath) };
+    let path_str = path_cstr.to_str().unwrap();
+
+    return String::from(path_str);
+}
+//}
+
+*mut な型もそこそこ頻出します。
+既出の例だと getattr() の第二引数 *mut stat です。
+この型は素直に Rust 風に解釈して、値が無いかもしれない型（Option）でありその実体は mutable な参照、と捉えてみます。
+*mut stat の場合は Option<&mut stat> にして扱うイメージです。
+この変換は as_mut() で簡単に実現可能です。
+
+//source[as_ref.rs]{
+let stbuf_ref = unsafe { stbuf.as_mut() };
+//}
+
+バッファは read(), write() などで登場します。
+特に read() の場合は読み込んだデータを書き出す必要があり mutable な値として扱うことに気をつけます。
+今回は Rust としてのバッファの型は、扱いやすさと libfuse に割り当てられた領域を使い回すことから &[u8] 、 mutable な場合は &mut [u8] にします。
+ここで代わりに Vec を使うとサイズを変更する操作をしてしまった際や Vec 型変数の寿命が尽きる際によくない振る舞いになることでしょう。
+この一見複雑そうな変換ですが、 std::slice::from_raw_parts(), std::slice::from_raw_parts_mut() で簡単に実現可能です。
+
+//source[from_raw_parts_mut.rs]{
+let sbuf = unsafe { slice::from_raw_parts_mut(buf as *mut u8, size) };
+//}
+
+最後が関数ポインタを引数に取るような例です。
+これは厄介であまり libfuse の中でも頻出する訳では無いのですが、先述の例でいうと readdir() の第三引数 fuse_fill_dir_t 型が該当するので向き合わなくてはなりません。
+悩ましいですが、今回は fuse_fill_dir_t 型変数と関連する値を Rust の構造体にラップして、 Rust のメソッドとして取り扱えるようにします。
+やや面倒ですが、逆に考えると readdir() を実装する側で面倒な処理を記述するコストが減りそうです。
+
+//source[readdir_filler.rs]{
+pub struct ReadDirFiller {
+    buf: *mut ::std::os::raw::c_void,
+    raw_filler: ::yarf_sys::fuse_fill_dir_t,
+}
+
+impl ReadDirFiller {
+    pub fn new(
+        buf: *mut ::std::os::raw::c_void,
+        raw_filler: ::yarf_sys::fuse_fill_dir_t,
+    ) -> ReadDirFiller {
+        ReadDirFiller { buf, raw_filler }
+    }
+
+    pub fn fill(
+        &self,
+        name: &str,
+        stbuf: *const stat,
+        offset: ::libc::off_t,
+    ) -> ::std::os::raw::c_int {
+        if let Some(func) = self.raw_filler {
+            if let Ok(cname) = CString::new(name) {
+                return unsafe { func(self.buf, cname.as_ptr(), stbuf, offset) };
+            }
+        }
+        -libc::EIO
+    }
+}
+//}
+
+これらにより、おおむね unsafe な操作を除外できました。
+
 ==== サンプルコードの記述
+
+改めて yarf クレートを利用して Hello, World! サンプルを実装してみます。
+以下のように unsafe を書かず、記述量も減らしつつサンプルの実装が行えています！
+
+//source[hello.rs]{
+extern crate libc;
+extern crate yarf;
+
+use libc::{off_t, stat};
+use std::io::Write;
+use std::os::raw::c_int;
+use std::ptr;
+use yarf::ReadDirFiller;
+use yarf::{FileSystem, FuseFileInfo};
+
+const HELLO_PATH: &str = "/hello";
+const HELLO_CONTENT: &str = "Hello, World!\n";
+
+struct HelloFS;
+
+impl FileSystem for HelloFS {
+    fn getattr(&self, path: String, stbuf: Option<&mut stat>) -> c_int {
+        match path.as_str() {
+            "/" => {
+                let mut st = stbuf.unwrap();
+                st.st_mode = libc::S_IFDIR | 0o755;
+                st.st_nlink = 2;
+                0
+            }
+            HELLO_PATH => {
+                let mut st = stbuf.unwrap();
+                st.st_mode = libc::S_IFREG | 0o444;
+                st.st_nlink = 1;
+                st.st_size = (HELLO_CONTENT.len() as c_int).into();
+                0
+            }
+            _ => -libc::ENOENT,
+        }
+    }
+
+    fn open(&self, path: String, _fi: Option<&mut FuseFileInfo>) -> c_int {
+        match path.as_str() {
+            HELLO_PATH => 0,
+            _ => -libc::ENOENT,
+        }
+    }
+
+    fn read(
+        &self,
+        path: String,
+        buf: &mut [u8],
+        _offset: off_t,
+        _fi: Option<&mut FuseFileInfo>,
+    ) -> c_int {
+        match path.as_str() {
+            HELLO_PATH => {
+                let content_len = HELLO_CONTENT.len();
+                let mut wbuf = buf;
+                wbuf.write(HELLO_CONTENT.as_bytes()).unwrap();
+                content_len as c_int
+            }
+            _ => -libc::ENOENT,
+        }
+    }
+
+    fn readdir(
+        &self,
+        path: String,
+        filler: ReadDirFiller,
+        _offset: off_t,
+        _fi: Option<&mut FuseFileInfo>,
+    ) -> c_int {
+        match path.as_str() {
+            "/" => {
+                filler.fill(".", ptr::null(), 0);
+                filler.fill("..", ptr::null(), 0);
+                filler.fill("hello", ptr::null(), 0);
+                0
+            }
+            _ => -libc::ENOENT,
+        }
+    }
+}
+
+fn main() {
+    let fs = Box::new(HelloFS);
+
+    yarf::yarf_main(fs);
+}
+//}
+
+==== クレートを crates.io に登録してみる
+
+こうしてある程度使い物になってきたであろうクレートを腐らせてしまうのも気が引けます。
+ここでは勇気を出して crates.io にクレートを公開してみます。
+
+まず https://crates.io/ にアクセスして GitHub アカウントでログインしてみましょう。
+その後 @<img>{syucream1_crates_io_01} のような Account Settings 画面に遷移して、 User Email が設定されていなければ設定しておきましょう。
+この画面でさらに、クレートを登録するのに使うトークンを発行できます。
+@<img>{syucream1_crates_io_02} のようにトークンを発行して、クレートの登録処理を行う環境で cargo login コマンドを実行してクレデンシャルファイルを準備しておきましょう。
+
+クレートの公開自体は cargo publish することで可能です。
+以下は yarf-sys クレートを publish した時の例です。
+
+//cmd{
+$ cargo publish
+    Updating crates.io index
+warning: manifest has no documentation, homepage or repository.
+See http://doc.crates.io/manifest.html#package-metadata for more info.
+   Packaging yarf-sys v0.0.2 (/path/to/yarf/yarf-sys)
+   Verifying yarf-sys v0.0.2 (/path/to/yarf/yarf-sys)
+    Updating crates.io index
+   Compiling pkg-config v0.3.14
+   Compiling libc v0.2.50
+   Compiling yarf-sys v0.0.2 (/path/to/yarf/target/package/yarf-sys-0.0.2)
+    Finished dev [unoptimized + debuginfo] target(s) in 10.05s
+   Uploading yarf-sys v0.0.2 (/path/to/yarf/yarf-sys)
+//}
+
+うまくいけば crates.io に自分のクレートのページが生成されるはずです。
+
+//image[syucream1_crates_io_01][crates.io Account Settings][scale=0.8]
+//image[syucream1_crates_io_02][crates.io Tokens][scale=0.8]
 
 == 反省点や知見など
 
+今回ネタにした Rust で ffi して libfuse とやり取りするクレートを作成するのは、その性質に沿ったハマりどころがありました。
+やはり C のライブラリを ffi で呼ぶ都合、 #[repr(C)] アトリビュートを付与した Rust の構造体が C 側でどう扱われるかは意識する必要があります。
+途中、 fuse_operations 構造体を Rust 側で部分的にしかメンバを定義しておらず、 libfuse 側でコールバック関数を呼び出す際に別メンバを参照しに行って結果コールバック関数が未実装と言われるなどのトラブルに見舞われました。
+また地味な点ですが、 8 進数リテラルが C++ では prefix が '0' だったのが Rust では '0o' なのに少々悩まされました。
+yarf クレートを作るにあたっては Rust の変数のライフタイムと libfuse が管理するポインタの扱いなどには悩まされました。
+
+今回のクレートのデバッグには主に rust-lldb を使っていました。
+また、 rustfmt @<fn>{rustfmt} や rust-clippy @<fn>{rust-clippy} にはお世話になりました。
+さらに余談ですが、エディタとしては CLion + Rust plugin を使っていました。シンタックスハイライトや補完が思いの外動いて快適です。
+
+//footnote[rustfmt][rustfmt: https://github.com/rust-lang/rustfmt]
+//footnote[rust-clippy][rust-clippy: https://github.com/rust-lang/rust-clippy]
+
 == まとめ
 
+以上、 Rust で ffi で libfuse の バインディングクレートを作るお話でした。
+Rust で、特に ffi を使って C, C++ 実装に配慮しつつ恐怖をいだきながら unsafe ブロックで囲むのは、 Rust をライトに使う限りはそう多くない気もしています。
+しかしながらこれらの使い方や挙動を知っておくことは、自身で新たな Rust バインディングを書きたくなった場合や、既存のクレートのトラブルシュートをする時に有用だと思われます。
+
+こうして Rust のある一面に触れて、強力かつ多機能であることをひしひしと感じられます。
+他方、使いこなすのに修練が必要だとも思われます。
+安全で高速で美しい Rust のコードを生み出すためにも、みなさんも一緒に精進していきましょう！
