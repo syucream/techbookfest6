@@ -3,7 +3,6 @@
 こんにちは、はじめまして、 @syu_cream です。
 シュークリームは、そんなに好きな訳ではありません
 この記事では Scala でコーディングした結果をつらつらとお伝えします。
-筆者がハマった点やあまり Web で見られないノウハウを紹介できれば幸いです。
 
 
 == はじめに
@@ -82,20 +81,24 @@ case class MyLogger() {
 == Scala と分散処理
 
 クロージャから視点を少し外し、 Scala と分散処理フレームワークについて考えてみます。
-Hadoop エコシステムは多くの場合 JVM を実行環境としており、特に Apache Spark はそれ自体が Scala で記述されていることもあり、しばしば分散処理のコードを Scala で実装することもあるでしょう。
+Hadoop エコシステムは多くの場合 JVM を実行環境としており、特に Apache Spark @<fn>{apache_spark} はそれ自体が Scala で記述されていることもあり、しばしば分散処理のコードを Scala で実装することもあるでしょう。
 
-Apache Spark ,Apache Flink, あるいは Apache Beam などで分散処理を記述する場合、各処理が Serializable であることを要求されます。
+Apache Spark, あるいは Apache Beam @<fn>{apache_beam} などで分散処理を記述する場合、各処理が Serializable であることを要求されます。
 これは各処理をシリアライズして各ワーカに配布して分散処理が可能にするためです。
 ただしこの Serializable の担保は余程気をつけてコーディングしないとハマることが多々あると思われます。
 特に Scala のクロージャのような自由変数を気軽に参照する場合には、 Serializable にするにはどうすればいいのか、そもそも何が原因で Serializable にならないのかを確認するのが困難になることもあるでしょう。
 
+//footnote[apache_spark][Apache Spark: https://spark.apache.org/]
+//footnote[apache_beam][Apache Beam: https://beam.apache.org/]
+
 ===[column] Serializable インタフェースと Scala
 
 不要だと思われますが、 Serializable インタフェースと Scala のクラスについて確認しておきます。
-Serializable インタフェースは単なる「そのクラスはシリアライズ可能だよ」と伝えるためのマークであり、何らかのメソッドの実装を要求したりしません。
+Serializable インタフェースは、単なる「そのクラスはシリアライズ可能だよ」と伝えるためのマークです。
+何らかのメソッドの実装を要求したりしません。
 シリアライズ対象のオブジェクトのクラス自体が Serializable であることと、そこから参照されるメンバがすべて Serializable であれば、そのオブジェクトが実際にシリアライズできます。
 
-また Scala において case class や object を使うと、そのクラスは Serializable が自動的に mixin されます。
+また Scala において case class や case object を使うと、そのクラスは Serializable が自動的に mixin されます。
 この挙動は普段あまり意識することが無いかも知れませんが、 Scala で Serializable が要求されるシーンでは重要なノウハウになってきます。
 
 ===[/column]
@@ -103,7 +106,7 @@ Serializable インタフェースは単なる「そのクラスはシリアラ�
 
 == Scala のクロージャのシリアライズについて
 
-実際にどのような時にクロージャが Serializable でなくて、その時どのような回避策があるのでしょうか。
+どのような時にクロージャがシリアライズできなくなるのでしょうか。
 ここではいくつかのクロージャの記述方法を比較しながらその動作の差異を確認してみます。
 
 === Serializable 確認の準備
@@ -117,7 +120,7 @@ trait Serializer {
 }
 //}
 
-実装には Kryo など既存の効率的なシリアライザを用いてもいいのですが、ここではシンプルに自前で実装しておきます。
+実装には Kryo @<fn>{kryo} など既存の効率的なシリアライザを用いてもいいのですが、ここではシンプルに自前で実装しておきます。
 
 //source[default_serializer.scala]{
 import java.io.{ByteArrayOutputStream, ObjectOutputStream}
@@ -154,6 +157,8 @@ class ClosureSpec extends FlatSpec with Matchers {
 
   }
 //}
+
+//footnote[kryo][Kryo: https://github.com/EsotericSoftware/kryo]
 
 === 簡単なシリアライズ可能な場合
 
@@ -234,7 +239,7 @@ class NonSerializable(id: Int) {  // Serializable を継承していない！
 
 === 簡単なシリアライズ不可能なケース
 
-対してどんな時にシリアライズ不可能になるのでしょうか？
+対して、シリアライズ不可能になるのはどんなケースでしょうか？
 まずは通りそうで通らないケースから触れてみます。
 
 シリアライズ可能な、 Serializable でないクラスのメンバを参照するクロージャがまずシリアライズ不可能です。
@@ -252,7 +257,7 @@ class ClosureSpec extends FlatSpec with Matchers {
     ...
 //}
 
-このクラスのメンバを参照すると、メソッドだろうが Serializable でないクラスのオブジェクトだろうが同様にシリアライズ不可能になってしまいます。
+このクラスのメンバを参照すると、関数でも Serializable でないクラスのオブジェクトでも、同様にシリアライズ不可能になってしまいます。
 
 //source[nonserializable01.scala]{
 class ClosureSpec extends FlatSpec with Matchers {
@@ -402,7 +407,7 @@ class ClosureSpec extends FlatSpec with Matchers {
 一方でネストしたブロック、クロージャからシリアライズ不可能な値を参照すると、やはりクロージャ全体がシリアライズ不可能になります。
 
 この例は、本誌のように順序立ててシリアライズ可能性について注意深く検証していればどうしてシリアライズ出来ないのか特定するのは簡単でしょう。
-しかしながら実世界である関数を自作していて、その後 closure3 のように単純にそれを呼び出すだけのクロージャを作ってシリアライズを要求する処理を組み立てたらどうでしょうか？
+しかしながら実世界で、ある関数を自作していてその後 closure3 のようにそれを呼び出すだけのクロージャを作った上で、シリアライズを要求する処理を組み立てたらどうでしょうか？
 コードの複雑性にもよるでしょうが、シリアライズが失敗する原因を特定するのが難しくなる場合もあるでしょう。
 
 //source[serializable12.scala]{
@@ -438,14 +443,22 @@ class ClosureSpec extends FlatSpec with Matchers {
     assertSerializable(closure5, false)
 //}
 
-=== 自動的な参照が邪魔をするケースと、 ClosureCleaner
+===[column] Scala 2.12 とクロージャ、そして ClosureCleaner
 
-〜バージョン依存の話、最新版だと問題にならない〜
+おそらく現在ひろく使われているであろう Scala 2.12 とその前の Scala 2.11 の間には無名関数における変更が入っています。
+主要な点として、無名関数のとる型 FunctionN が SAM(Single Abstract Method, メソッドが 1 つしかない abstract class) となったことが挙げられます。
+これにより Java8 と Scala の互換性が高まりました。
 
-最後に面白いケースを紹介します。
-これまで確認してきた通り、以下のコードにおいて closure1 はシリアライズ可能、 closure2 は Serializable でないクラスのメンバを参照しているためシリアライズ不可能となります。
+加えて、 Scala 2.12 ではクロージャのキャプチャの挙動に以下のような変更が入っています。
 
-//source[closurecleaner1.scala]{
+ * 使用していない不要な参照をキャプチャするのをやめるようになった
+ * ローカルメソッドがインスタンスメンバを参照しない場合に静的なものに変換するようになった
+
+不要な参照を除外することによって、シリアライズ後のバイナリサイズを削減し、予期せぬシリアライズの失敗を避けることができます。
+またメソッドはインスタンスメンバへの参照を持つため、シリアライズの失敗を招く可能性があるのですが、これが解消されました。
+例えば Scala 2.11 以下ではこのようなローカルメソッドをキャプチャするクロージャのシリアライズには失敗していました。
+
+//source[localdef.scala]{
 class ClosureSpec extends FlatSpec with Matchers {
   ...
 
@@ -453,14 +466,19 @@ class ClosureSpec extends FlatSpec with Matchers {
 
   it should "serializable" in {
     ...
-    val localValue = someSerializableValue
-    val v = localValue
-    val closure1 = () => v
-    val closure2 = () => v + someSerializableValue
+    def a = 1
+    val closure = (x: Int) => x + a
 
-    assertSerializable(closure1, true)
-    assertSerializable(closure2, false)
+    assertSerializable(closure, false)
 //}
+
+Apache Spark では以前より、このようなシリアライズに関する問題の緩和策として、 ClosureCleaner @<fn>{closurecleaner} というクロージャをクリンナップする仕組みを設けていました。
+
+//footnote[scala212][Scala 2.12: https://www.scala-lang.org/news/2.12.0/]
+//footnote[scala212_lambda_capturing][Scala 2.12 lambda: https://www.scala-lang.org/news/2.12.0/#lambdas-capturing-outer-instances]
+//footnote[closurecleaner][ClosureCleaner: https://www.quora.com/Apache-Spark/What-does-Closure-cleaner-func-mean-in-Spark]
+
+===[/column]
 
 
 == おわりに
@@ -473,9 +491,10 @@ Scala はリッチな表現が出来るお陰か、注意していないと予�
  * シリアライズ可能であることを要求されるコーディングにおいて、可能な限り class でなく case class, object を使ってクラス定義する
 
 余談ですが、筆者は最近 Apache Beam によるストリームデータ処理を行うコードを仕事で記述しています。
-そこで Scala で ETL 処理記述するにあたり Spotify の Scio を使用しています。
+そこで Scala でデータ処理記述するにあたり Spotify の Scio @<fn>{scio} を使用しています。
 Scio はまるで List や Seq などの標準コレクションを操作するかのように入力データコレクションに対して map, flatMap, filter, reduce などのメソッドが使えて便利なのです。
 一方、これらのメソッドに渡すクロージャから Serializable でないクラスのメンバの、ロガーなどを参照するコードを量産してしまってえらくハマってしまった経験があります。
 もしみなさんが ETL 処理を Scala で記述する際に、同じ轍を踏まないことを祈っております。
 この記事が少しでもそのための役に立てれば幸いです。
 
+//footnote[scio][Scio: https://github.com/spotify/scio]
