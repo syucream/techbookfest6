@@ -278,7 +278,7 @@ class ClosureSpec extends FlatSpec with Matchers {
 ここでは 2 種類の回避方法を紹介します。
 
 １つ目は、可能であれば参照先メンバを Serializable なクラスに持たせてしまうことです。
-object で定義したクラスに持たせてしまうなどどうでしょうか。
+例えば object で定義したクラスに持たせてしまうなどで対処できます。
 
 //source[to_serializable01.scala]{
 class ClosureSpec extends FlatSpec with Matchers {
@@ -312,6 +312,127 @@ object ClosureSpec {
 ...
 //}
 
-二つ目は @transient マクロと遅延評価を用いる方法です。
+二つ目は、 Serializable でないクラスのメンバを直接参照するのをやめてブロック内で再定義しておくケースです。
+メンバがもともと Serializable な型であればこれで回避可能です。
+例えば以下のようにします。
 
-〜〜ほげふが〜〜
+//source[to_serializable02.scala]{
+class ClosureSpec extends FlatSpec with Matchers {
+  ...
+
+  import ClosureSpec._
+
+  it should "serializable" in {
+    ...
+    val someSerializableValueInLocal =  someSerializableValue
+    val someSerializableMethodInLocal =  someSerializableMethod()
+    val closure1 = () => someSerializableValueInLocal
+    val closure2 = () => someSerializableMethodInLocal
+
+    assertSerializable(closure1, true)
+    assertSerializable(closure2, true)
+  }
+  ...
+//}
+
+ちなみにここでクラスのメンバを遅延評価するとシリアライズ不可能になってしまいます。
+
+//source[to_nonserializable01.scala]{
+class ClosureSpec extends FlatSpec with Matchers {
+  ...
+
+  import ClosureSpec._
+
+  it should "serializable" in {
+    ...
+    // lazy!
+    lazy val someSerializableValueInLocal =  someSerializableValue
+    lazy val someSerializableMethodInLocal =  someSerializableMethod()
+    val closure1 = () => someSerializableValueInLocal
+    val closure2 = () => someSerializableMethodInLocal
+
+    assertSerializable(closure1, true)
+    assertSerializable(closure2, true)
+  }
+  ...
+//}
+
+=== 複雑なシリアライズ可能なケース
+
+やや複雑な例を提示してみます。
+このようにブロックがネストしていたり、クロージャをネストして呼び出していても、個別のブロック、クロージャが Serializable であればシリアライズが可能です。
+
+//source[serializable11.scala]{
+class ClosureSpec extends FlatSpec with Matchers {
+  ...
+
+  import ClosureSpec._
+
+  it should "serializable" in {
+    ...
+    val localValue = someSerializableValue
+    val closure1 = (x: Int) => x +localValue
+    val closure2 = (x: Int, y: Int) => closure1(x) + y
+    val closure3 = (x: Int, y: Int, z: Int) => closure2(x, y) + z
+
+    val closure4 = {x: Int =>
+      def addOne(v: Int): Int = v + localValue
+      addOne(x)
+    }
+
+    val closure5 = {(x: Int, y:Int) =>
+      val v1 = x + localValue
+      val v = {
+        val v2 = y + 2
+        v1 + v2
+      }
+      v
+    }
+
+    assertSerializable(closure1, true)
+    assertSerializable(closure2, true)
+    assertSerializable(closure3, true)
+    assertSerializable(closure4, true)
+    assertSerializable(closure5, true)
+//}
+
+=== 複雑なシリアライズ不可能なケース
+
+一方でネストしたブロック、クロージャからシリアライズ不可能な値を参照すると、やはりクロージャ全体がシリアライズ不可能になります。
+
+この例は、本誌のように順序立ててシリアライズ可能性について注意深く検証していればどうしてシリアライズ出来ないのか特定するのは簡単でしょう。
+しかしながら実世界である関数を自作していて、その後 closure3 のように単純にそれを呼び出すだけのクロージャを作ってシリアライズを要求する処理を組み立てたらどうでしょうか？
+コードの複雑性にもよるでしょうが、シリアライズが失敗する原因を特定するのが難しくなる場合もあるでしょう。
+
+//source[serializable12.scala]{
+class ClosureSpec extends FlatSpec with Matchers {
+  ...
+
+  import ClosureSpec._
+
+  it should "serializable" in {
+    ...
+    val closure1 = (x: Int) => x + someSerializableValue
+    val closure2 = (x: Int, y: Int) => closure1(x) + y
+    val closure3 = (x: Int, y: Int, z: Int) => closure2(x, y) + z
+
+    val closure4 = {x: Int =>
+      def addOne(v: Int): Int = v + someSerializableValue
+      addOne(x)
+    }
+
+    val closure5 = {(x: Int, y:Int) =>
+      val v1 = x + someSerializableValue
+      val v = {
+        val v2 = y + 2
+        v1 + v2
+      }
+      v
+    }
+
+    assertSerializable(closure1, false)
+    assertSerializable(closure2, false)
+    assertSerializable(closure3, false)
+    assertSerializable(closure4, false)
+    assertSerializable(closure5, false)
+//}
