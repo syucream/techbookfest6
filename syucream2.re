@@ -474,13 +474,9 @@ class ClosureSpec extends FlatSpec with Matchers {
 
 Apache Spark では以前より、このようなシリアライズに関する問題の緩和策として、 ClosureCleaner @<fn>{closurecleaner} というクロージャをクリンナップする仕組みを設けていました。
 
-<!-- textlint-disable -->
-
 //footnote[scala212][Scala 2.12: https://www.scala-lang.org/news/2.12.0/]
-//footnote[scala212_lambda_capturing][Scala 2.12 lambda capturing: https://www.scala-lang.org/news/2.12.0/#lambdas-capturing-outer-instances]
+//footnote[scala212_lambda_capturing][Scala 2.12 lambda: https://www.scala-lang.org/news/2.12.0/#lambdas-capturing-outer-instances]
 //footnote[closurecleaner][ClosureCleaner: https://www.quora.com/Apache-Spark/What-does-Closure-cleaner-func-mean-in-Spark]
-
-<!-- textlint-enable -->
 
 ===[/column]
 
