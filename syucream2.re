@@ -3,7 +3,6 @@
 こんにちは、はじめまして、 @syu_cream です。
 シュークリームは、そんなに好きな訳ではありません
 この記事では Scala でコーディングした結果をつらつらとお伝えします。
-筆者がハマった点やあまり Web で見られないノウハウを紹介できれば幸いです。
 
 
 == はじめに
@@ -95,7 +94,8 @@ Apache Spark, あるいは Apache Beam @<fn>{apache_beam} などで分散処理�
 ===[column] Serializable インタフェースと Scala
 
 不要だと思われますが、 Serializable インタフェースと Scala のクラスについて確認しておきます。
-Serializable インタフェースは単なる「そのクラスはシリアライズ可能だよ」と伝えるためのマークであり、何らかのメソッドの実装を要求したりしません。
+Serializable インタフェースは、単なる「そのクラスはシリアライズ可能だよ」と伝えるためのマークです。
+何らかのメソッドの実装を要求したりしません。
 シリアライズ対象のオブジェクトのクラス自体が Serializable であることと、そこから参照されるメンバがすべて Serializable であれば、そのオブジェクトが実際にシリアライズできます。
 
 また Scala において case class や case object を使うと、そのクラスは Serializable が自動的に mixin されます。
@@ -106,7 +106,7 @@ Serializable インタフェースは単なる「そのクラスはシリアラ�
 
 == Scala のクロージャのシリアライズについて
 
-実際にどのような時にクロージャが Serializable でなくて、その時どのような回避策があるのでしょうか。
+どのような時にクロージャがシリアライズできなくなるのでしょうか。
 ここではいくつかのクロージャの記述方法を比較しながらその動作の差異を確認してみます。
 
 === Serializable 確認の準備
@@ -239,7 +239,7 @@ class NonSerializable(id: Int) {  // Serializable を継承していない！
 
 === 簡単なシリアライズ不可能なケース
 
-対してどんな時にシリアライズ不可能になるのでしょうか？
+対して、シリアライズ不可能になるのはどんなケースでしょうか？
 まずは通りそうで通らないケースから触れてみます。
 
 シリアライズ可能な、 Serializable でないクラスのメンバを参照するクロージャがまずシリアライズ不可能です。
@@ -257,7 +257,7 @@ class ClosureSpec extends FlatSpec with Matchers {
     ...
 //}
 
-このクラスのメンバを参照すると、メソッドだろうが Serializable でないクラスのオブジェクトだろうが同様にシリアライズ不可能になってしまいます。
+このクラスのメンバを参照すると、関数でも Serializable でないクラスのオブジェクトでも、同様にシリアライズ不可能になってしまいます。
 
 //source[nonserializable01.scala]{
 class ClosureSpec extends FlatSpec with Matchers {
@@ -407,7 +407,7 @@ class ClosureSpec extends FlatSpec with Matchers {
 一方でネストしたブロック、クロージャからシリアライズ不可能な値を参照すると、やはりクロージャ全体がシリアライズ不可能になります。
 
 この例は、本誌のように順序立ててシリアライズ可能性について注意深く検証していればどうしてシリアライズ出来ないのか特定するのは簡単でしょう。
-しかしながら実世界である関数を自作していて、その後 closure3 のように単純にそれを呼び出すだけのクロージャを作ってシリアライズを要求する処理を組み立てたらどうでしょうか？
+しかしながら実世界で、ある関数を自作していてその後 closure3 のようにそれを呼び出すだけのクロージャを作った上で、シリアライズを要求する処理を組み立てたらどうでしょうか？
 コードの複雑性にもよるでしょうが、シリアライズが失敗する原因を特定するのが難しくなる場合もあるでしょう。
 
 //source[serializable12.scala]{
@@ -447,7 +447,7 @@ class ClosureSpec extends FlatSpec with Matchers {
 
 おそらく現在ひろく使われているであろう Scala 2.12 とその前の Scala 2.11 の間には無名関数における変更が入っています。
 主要な点として、無名関数のとる型 FunctionN が SAM(Single Abstract Method, メソッドが 1 つしかない abstract class) となったことが挙げられます。
-これにより Java8 と Scala の互換性が高まる効果が得られました。
+これにより Java8 と Scala の互換性が高まりました。
 
 加えて、 Scala 2.12 ではクロージャのキャプチャの挙動に以下のような変更が入っています。
 
@@ -474,9 +474,13 @@ class ClosureSpec extends FlatSpec with Matchers {
 
 Apache Spark では以前より、このようなシリアライズに関する問題の緩和策として、 ClosureCleaner @<fn>{closurecleaner} というクロージャをクリンナップする仕組みを設けていました。
 
+<!-- textlint-disable -->
+
 //footnote[scala212][Scala 2.12: https://www.scala-lang.org/news/2.12.0/]
 //footnote[scala212_lambda_capturing][Scala 2.12 lambda capturing: https://www.scala-lang.org/news/2.12.0/#lambdas-capturing-outer-instances]
 //footnote[closurecleaner][ClosureCleaner: https://www.quora.com/Apache-Spark/What-does-Closure-cleaner-func-mean-in-Spark]
+
+<!-- textlint-enable -->
 
 ===[/column]
 
