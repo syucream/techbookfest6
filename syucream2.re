@@ -436,3 +436,44 @@ class ClosureSpec extends FlatSpec with Matchers {
     assertSerializable(closure4, false)
     assertSerializable(closure5, false)
 //}
+
+=== 自動的な参照が邪魔をするケースと、 ClosureCleaner
+
+〜バージョン依存の話、最新版だと問題にならない〜
+
+最後に面白いケースを紹介します。
+これまで確認してきた通り、以下のコードにおいて closure1 はシリアライズ可能、 closure2 は Serializable でないクラスのメンバを参照しているためシリアライズ不可能となります。
+
+//source[closurecleaner1.scala]{
+class ClosureSpec extends FlatSpec with Matchers {
+  ...
+
+  import ClosureSpec._
+
+  it should "serializable" in {
+    ...
+    val localValue = someSerializableValue
+    val v = localValue
+    val closure1 = () => v
+    val closure2 = () => v + someSerializableValue
+
+    assertSerializable(closure1, true)
+    assertSerializable(closure2, false)
+//}
+
+
+== おわりに
+
+本記事で挙げた通り、 Scala でクロージャを書く時にシリアライズ可能になるかどうかはその書き方に依存します。
+Scala はリッチな表現が出来るお陰か、注意していないと予期せぬ罠にハマる可能性があるかも知れません。
+まずは以下のことを注意すると良いでしょう。
+
+ * クロージャ内から参照する自由変数の定義の場所を意識する
+ * シリアライズ可能であることを要求されるコーディングにおいて、可能な限り class でなく case class, object を使ってクラス定義する
+
+余談ですが、筆者は最近 Apache Beam によるストリームデータ処理を行うコードを仕事で記述していて、 Scala で ETL 処理記述するにあたり Spotify の Scio を使用していました。
+Scio はまるで List や Seq などの標準コレクションを操作するかのように入力データコレクションに対して map, flatMap, filter, reduce などのメソッドが使えて便利なのです。
+一方、これらのメソッドに渡すクロージャから Serializable でないクラスのメンバの、ロガーなどを参照するコードを量産してしまってえらくハマってしまった経験があります。
+もしみなさんが ETL 処理を Scala で記述する際に、同じ轍を踏まないことを祈っております。
+この記事が少しでもそのための役に立てれば幸いです。
+
