@@ -1,4 +1,4 @@
-= Rust で ffi で FUSE ライブラリを自作する
+= Rust で ffi を使って FUSE ライブラリを自作する
 
 こんにちは、はじめまして、 @syu_cream です。
 好きなスイーツはおはぎです。
@@ -6,8 +6,8 @@
 
 == はじめに
 
-Rust は Firefox などの開発元としてよく知られる Mozilla が開発しているモダンなプログラミング言語です。
-新し目のプログラミング言語なだけあって、最近台頭してきた言語によくあるような以下のような機能を持っています。
+Rust @<fn>{rust} は Firefox などの開発元としてよく知られる Mozilla が開発しているモダンなプログラミング言語です。
+新しめのプログラミング言語なだけあって、最近台頭してきた言語によくあるような以下のような機能を持っています。
 
  * パターンマッチ
  * null 安全な型 Option
@@ -21,18 +21,19 @@ Rust は Firefox などの開発元としてよく知られる Mozilla が開発
  * シンプルな ffi による C, C++ 関数の呼び出し
  * unsafe ブロックによる柔軟で明示的な危険な操作(ポインタのデリファレンスや C, C++関数呼び出しなど)
 
-これらの機能により C, C++ などより安全にシステムプログラミングが可能であり、かつ既存の C, C++ の資産を利用可能なプログラミング言語です。
+これらの機能により C, C++ などより安全にシステムプログラミングが可能であり、かつ既存の C, C++ の資産を利用可能です。
 
 本記事では Rust で ffi で C, C++ の資産を利用するコードを書いてみます。
 ここでは FUSE(Filesystem in UserSpace) のライブラリである libfuse のハイレベル API のラッパーライブラリを作ってみます。
 
+//footnote[rust][Rust: https://www.rust-lang.org/]
 
-== FUSE(Filesystem in UserSpace)  について
+== FUSE  について
 
-FUSE はユーザスペースで安全かつ気軽に独自のファイルシステムを動作させるための仕組みです。
+FUSE(Filesystem in UserSpace) はユーザスペースで安全かつ簡単に独自のファイルシステムを動作させるための仕組みです。
 
 独自にファイルシステムを作る場合、従来はカーネルレベルのプログラミングが必要で、実装やデバッグが大変だったり導入障壁が高かったりなどの問題がありました。
-FUSE ではユーザスペースで動作するプログラムを記述することになるので、カーネルプログラミングを意識せずデバッグの容易性も上がります。
+FUSE ではユーザスペースで動作するプログラムを記述することになるので、カーネルプログラミングをせずデバッグの容易性も上がります。
 
 Linux における FUSE の構成としては、 FUSE のカーネルモジュールとそれをユーザスペースから使いやすくするライブラリ @<fn>{libfuse} の 2 コンポーネントから構成されます。
 FUSE を使ったアプリケーションの多くはこの libfuse のインタフェースを利用してファイルシステムを構築したものになります。
@@ -154,6 +155,11 @@ int main(int argc, char *argv[]) {
 === FUSE アプリケーションの動作確認方法
 
 このサンプルをコンパイルする時には例えば以下のようにします。
+
+//cmd{
+$ g++ -Wall hello.cpp --std=c++0x -DFUSE_USE_VERSION=29 `pkg-config fuse --cflags --libs` -o hello
+//}
+
 constexpr や auto など C++11 以降の機能を使っているため、 --std=c++0x のように C++11 以降を使うことを明示します。
 また FUSE のバージョンは今回は筆者の環境では 29 を指定しました。
 FUSE の共有ライブラリとヘッダのパスには pkg-config を介して指定します。
@@ -161,10 +167,6 @@ pkg-config を用いることは必須ではありません。
 しかし、特に macOS を用いる場合は osxfuse のパスを指定する必要があるなど手動指定だとハマりどころが多いため、 pkg-config を用いてしまうのがシンプルで済むと思われます。
 余談ですが libfuse と osxfuse はシグネチャとしてはほぼ同じになり、内容によっては osxfuse にリンクする想定のはずが libfuse にリンクしてしまえる場合があります。
 筆者はそれに気づかず多少の時間を無駄に費やしました。
-
-//cmd{
-$ g++ -Wall hello.cpp --std=c++0x -DFUSE_USE_VERSION=29 `pkg-config fuse --cflags --libs` -o hello
-//}
 
 次にこの hello ファイルシステムを実際にマウントしてみます。
 ここでは適当に tmp ディレクトリを作成し、それにマウントしてみました。
@@ -909,7 +911,7 @@ fn main() {
 ==== クレートを crates.io に登録してみる
 
 こうしてある程度使い物になってきたであろうクレートを腐らせてしまうのも気が引けます。
-ここでは勇気を出して crates.io にクレートを公開してみます。
+ここでは勇気を出して crates.io @<fn>{crates_io} にクレートを公開してみます。
 
 まず https://crates.io/ にアクセスして GitHub アカウントでログインしてみましょう。
 その後 @<img>{syucream1_crates_io_01} のような Account Settings 画面に遷移して、 User Email が設定されていなければ設定しておきましょう。
@@ -936,6 +938,7 @@ See http://doc.crates.io/manifest.html#package-metadata for more info.
 
 うまくいけば crates.io に自分のクレートのページが生成されるはずです。
 
+//footnote[crates_io][crates.io: https://crates.io/]
 //image[syucream1_crates_io_01][crates.io Account Settings][scale=0.8]
 //image[syucream1_crates_io_02][crates.io Tokens][scale=0.8]
 

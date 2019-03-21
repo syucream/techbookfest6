@@ -7,7 +7,7 @@
 
 == はじめに
 
-Scala はオブジェクト指向と関数型のマルチパラダイムなプログラミング言語です。
+Scala @<fn>{scala} はオブジェクト指向と関数型のマルチパラダイムなプログラミング言語です。
 JVM を動作ターゲットプラットフォームとしており既存の Java の資産を活用できます。
 また、新し目のプログラミング言語だけあって以下のようなリッチな機能を有しています。
 
@@ -26,12 +26,15 @@ JVM を動作ターゲットプラットフォームとしており既存の Jav
 
 本記事では特に分散処理において Scala で処理を記述する時に生じる、クロージャとそれが Serializable であることを担保する際に生じる課題についてつらつらと記述します。
 
+//footnote[scala][Scala: https://www.scala-lang.org/]
+
 
 == Scala のクロージャ
 
 クロージャ自体は Scala に限定した機構ではなくて、例えば JavaScript などに慣れた方ならなじみが深いでしょう。
-ざっくりいうと、自由変数を参照可能な（エンクローズする）無名関数です。
+ざっくりいうと、自由変数を参照可能な無名関数です。
 
+最初に、いくつかクロージャの使用例を確認しましょう。
 まず自由変数の参照のない簡素なクロージャを示してみます。
 
 //source[closure1.scala]{
@@ -173,7 +176,7 @@ class ClosureSpec extends FlatSpec with Matchers {
   it should "serializable" in {
     ...
     val closure = () => 1
-    assertSerializable(closure, true)  // passed!
+    assertSerializable(closure, true)  // serializable!
 //}
 
 次に引数を取るようにしてみます。
@@ -185,7 +188,7 @@ class ClosureSpec extends FlatSpec with Matchers {
   it should "serializable" in {
     ...
     val closure = (x: Int) => x + 1
-    assertSerializable(closure, true)  // passed!
+    assertSerializable(closure, true)  // serializable!
 //}
 
 今度はラムダの外の自由変数、ただしクロージャを定義したのと同じブロックで宣言されている変数を参照するようにしてみます。
@@ -198,7 +201,7 @@ class ClosureSpec extends FlatSpec with Matchers {
     ...
     val localValue = 1
     val closure = (x: Int) => localValue + 1
-    assertSerializable(closure, true)  // passed!
+    assertSerializable(closure, true)  // serializable!
 //}
 
 localValue の値を外のブロックで一度定義した後 localValue に代入した場合でも同様です。
@@ -212,7 +215,7 @@ class ClosureSpec extends FlatSpec with Matchers {
     ...
     val localValue = someSerializableValue
     val closure = (x: Int) => localValue + 1
-    assertSerializable(closure, true)  // passed!
+    assertSerializable(closure, true)  // serializable!
 //}
 
 では敢えて Serializable でないクラスを定義して、そのオブジェクトを参照した場合はどうでしょうか？
@@ -226,7 +229,7 @@ class ClosureSpec extends FlatSpec with Matchers {
   it should "serializable" in {
     ...
     val closure = () => new NonSerializable(1)
-    assertSerializable(closure, true)  // passed!
+    assertSerializable(closure, true)  // serializable!
     ...
   }
   ...
@@ -253,7 +256,7 @@ class ClosureSpec extends FlatSpec with Matchers {
   it should "serializable" in {
     ...
     val closure = () => someSerializableValue
-    assertSerializable(closure, false)
+    assertSerializable(closure, false)  // not serializable...
     ...
 //}
 
@@ -272,9 +275,9 @@ class ClosureSpec extends FlatSpec with Matchers {
     val closure3 = () => someNonSerializableValue
     val closure4 = () => someNonSerializableMethod()
 
-    assertSerializable(closure2, false)
-    assertSerializable(closure3, false)
-    assertSerializable(closure4, false)
+    assertSerializable(closure2, false)  // not serializable...
+    assertSerializable(closure3, false)  // not serializable...
+    assertSerializable(closure4, false)  // not serializable...
 //}
 
 === 簡単なシリアライズ不可能なケースの対処法
@@ -283,8 +286,8 @@ class ClosureSpec extends FlatSpec with Matchers {
 手っ取り早いシリアライズ可能にする方法はあるのでしょうか？
 ここでは 2 種類の回避方法を紹介します。
 
-１つ目は、可能であれば参照先メンバを Serializable なクラスに持たせてしまうことです。
-例えば object で定義したクラスに持たせてしまうなどで対処できます。
+１つ目は、可能であれば参照先メンバを object で定義したシングルトンオブジェクトに持たせてしまうことです。
+例えば以下のようにしてシリアライズ可能にできます。
 
 //source[to_serializable01.scala]{
 class ClosureSpec extends FlatSpec with Matchers {
@@ -299,10 +302,10 @@ class ClosureSpec extends FlatSpec with Matchers {
     val closure08 = () => someNonSerializableValueInObject
     val closure09 = () => someNonSerializableMethodInObject()
 
-    assertSerializable(closure06, true)
-    assertSerializable(closure07, true)
-    assertSerializable(closure08, true)
-    assertSerializable(closure09, true)
+    assertSerializable(closure06, true)  // serializable!
+    assertSerializable(closure07, true)  // serializable!
+    assertSerializable(closure08, true)  // serializable!
+    assertSerializable(closure09, true)  // serializable!
     ...
   }
   ...
@@ -335,13 +338,13 @@ class ClosureSpec extends FlatSpec with Matchers {
     val closure1 = () => someSerializableValueInLocal
     val closure2 = () => someSerializableMethodInLocal
 
-    assertSerializable(closure1, true)
-    assertSerializable(closure2, true)
+    assertSerializable(closure1, true)  // serializable!
+    assertSerializable(closure2, true)  // serializable!
   }
   ...
 //}
 
-ちなみにここでクラスのメンバを遅延評価するとシリアライズ不可能になってしまいます。
+余談ですが、ここでクラスのメンバを遅延評価するとシリアライズ不可能になってしまいます。
 
 //source[to_nonserializable01.scala]{
 class ClosureSpec extends FlatSpec with Matchers {
@@ -357,8 +360,8 @@ class ClosureSpec extends FlatSpec with Matchers {
     val closure1 = () => someSerializableValueInLocal
     val closure2 = () => someSerializableMethodInLocal
 
-    assertSerializable(closure1, true)
-    assertSerializable(closure2, true)
+    assertSerializable(closure1, true)  // not serializable...
+    assertSerializable(closure2, true)  // not serializable...
   }
   ...
 //}
@@ -395,11 +398,11 @@ class ClosureSpec extends FlatSpec with Matchers {
       v
     }
 
-    assertSerializable(closure1, true)
-    assertSerializable(closure2, true)
-    assertSerializable(closure3, true)
-    assertSerializable(closure4, true)
-    assertSerializable(closure5, true)
+    assertSerializable(closure1, true)  // serializable!
+    assertSerializable(closure2, true)  // serializable!
+    assertSerializable(closure3, true)  // serializable!
+    assertSerializable(closure4, true)  // serializable!
+    assertSerializable(closure5, true)  // serializable!
 //}
 
 === 複雑なシリアライズ不可能なケース
@@ -436,11 +439,11 @@ class ClosureSpec extends FlatSpec with Matchers {
       v
     }
 
-    assertSerializable(closure1, false)
-    assertSerializable(closure2, false)
-    assertSerializable(closure3, false)
-    assertSerializable(closure4, false)
-    assertSerializable(closure5, false)
+    assertSerializable(closure1, false)  // not serializable...
+    assertSerializable(closure2, false)  // not serializable...
+    assertSerializable(closure3, false)  // not serializable...
+    assertSerializable(closure4, false)  // not serializable...
+    assertSerializable(closure5, false)  // not serializable...
 //}
 
 ===[column] Scala 2.12 とクロージャ、そして ClosureCleaner
@@ -469,7 +472,7 @@ class ClosureSpec extends FlatSpec with Matchers {
     def a = 1
     val closure = (x: Int) => x + a
 
-    assertSerializable(closure, false)
+    assertSerializable(closure, false)  // not serializable...
 //}
 
 Apache Spark では以前より、このようなシリアライズに関する問題の緩和策として、 ClosureCleaner @<fn>{closurecleaner} というクロージャをクリンナップする仕組みを設けていました。
