@@ -197,7 +197,7 @@ $ cat tmp/hello
 Hello, World!
 //}
 
-== RUST でやるFUSE
+== RUST ではじめる FUSE
 
 C++ での FUSE アプリケーションプログラミングの流れもあらかたつかめたところで、お待ちかねの Rust でのコーディングに入ってみましょう。
 
@@ -219,7 +219,7 @@ rust-fuse としては、 C 実装のハイレベル API を直接呼び出す�
 
 今回の Rust FUSE ライブラリは rust-fuse と親しい機能を持ちながら思想がやや異なることから、 yarf(Yet Another Rust Fuse) と名付けます。
 
-=== Rust でやる ffi
+=== Rust ではじめる ffi
 
 さて、 Rust でそもそもどのように C あるいは C++ のライブラリを扱うことができるのでしょうか？
 
@@ -271,10 +271,12 @@ Rust の ffi を使ったライブラリの実装パターンとして、よく�
  * C, C++ の ffi のための記述だけ分離した sys クレート
  * sys クレートを用いて Rust らしいなるべく安全なインタフェースを提供するクレート
 
-yarf でもそれに従い、以下のような構成で作っていきます。
+yarf でもそれに従い、@<img>{syucream1_yarf_design} に示すような構成で作っていきます。
+
+//image[syucream1_yarf_design][yarf の設計]
 
  * FUSE ハイレベル API を扱うことに注力する yarf-sys クレート
- * yarf-sys を用いて Rust のコーディングが用意になる yarf クレート
+ * yarf-sys を用いて Rust のコーディングが容易になる yarf クレート
  
 yarf クレートではFUSE の各コールバック関数を trait として取り扱かいます。
 また、なるべく unsafe ブロックを記述しなくて済むようにすることを目指します。
@@ -948,6 +950,15 @@ See http://doc.crates.io/manifest.html#package-metadata for more info.
 //}
 
 うまくいけば crates.io に自分のクレートのページが生成されるはずです。
+
+無事に crates.io にクレートが公開できれば、後は Cargo.toml に依存関係を記述して利用できるようになります！
+
+//source[Cargo.toml]{
+...
+[dependencies]
+yarf = "0.0.2"
+...
+//}
 
 //footnote[crates_io][crates.io: https://crates.io/]
 //image[syucream1_crates_io_01][crates.io Account Settings][scale=0.8]

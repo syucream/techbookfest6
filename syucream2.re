@@ -87,7 +87,10 @@ case class MyLogger() {
 Hadoop エコシステムは多くの場合 JVM を実行環境としており、特に Apache Spark @<fn>{apache_spark} はそれ自体が Scala で記述されていることもあり、しばしば分散処理のコードを Scala で実装することもあるでしょう。
 
 Apache Spark, あるいは Apache Beam @<fn>{apache_beam} などで分散処理を記述する場合、各処理が Serializable であることを要求されます。
-これは各処理をシリアライズして各ワーカに配布して分散処理が可能にするためです。
+これは @<img>{syucream2_serialized_tasks} のようなイメージで各処理をシリアライズして各ワーカに配布して分散処理が可能にするためです。
+
+//image[syucream2_serialized_tasks][分散処理とシリアライズ][scale=0.8]
+
 ただしこの Serializable の担保は余程気をつけてコーディングしないとハマることが多々あると思われます。
 特に Scala のクロージャのような自由変数を気軽に参照する場合には、 Serializable にするにはどうすればいいのか、そもそも何が原因で Serializable にならないのかを確認するのが困難になることもあるでしょう。
 
@@ -419,7 +422,8 @@ public final class MyClosure$ {
 }
 //}
 
-シングルトンオブジェクトを参照することでシリアライズ可能にする Java のコードも、直接書いて確認してみました。
+Scala のコードから生成したクラスファイルのデコンパイル結果は様々な付加情報があるため、動作確認が難しいです。
+ここでは更に、シングルトンオブジェクトを参照することでシリアライズ可能にするシンプルな Java のコードも直接書いて確認してみました。
 以下の例において serialize() はシリアライズが可能なのですが、やはり notSerializable() ではシリアライズに失敗します。
 
 //source[to_serializable01_03.java]{
@@ -434,8 +438,8 @@ class Closure4 {
     MyClosure myClosure = new MyClosure();
 
     try {
-      DefaultSerializer.serialize(myClosure.serializable());
-      DefaultSerializer.serialize(myClosure.notSerializable());
+      DefaultSerializer.serialize(myClosure.serializable());  // passed!
+      DefaultSerializer.serialize(myClosure.notSerializable());  // failed...
     } catch (Exception e) {
       e.printStackTrace();
     }
@@ -665,10 +669,14 @@ Scala はリッチな表現が出来るお陰か、注意していないと予�
  * クロージャ内から参照する自由変数の定義の場所を意識する
  * シリアライズ可能であることを要求されるコーディングにおいて、可能な限り class でなく case class, object を使ってクラス定義する
 
+シリアライズは分散処理フレームワークに触れていると多々直面する問題です。
+実際に Web を調べてみると NotSerializableException にハマったエピソードが見受けられます。
+しかしながらどんな状況でシリアライズ可能か不可能かについてまとめた日本語の情報はあまり無かったため、今回筆を取ってみました。
+
 余談ですが、筆者は最近 Apache Beam によるストリームデータ処理を行うコードを仕事で記述しています。
 そこで Scala でデータ処理記述するにあたり Spotify の Scio @<fn>{scio} を使用しています。
 Scio はまるで List や Seq などの標準コレクションを操作するかのように入力データコレクションに対して map, flatMap, filter, reduce などのメソッドが使えて便利なのです。
-一方、これらのメソッドに渡すクロージャから Serializable でないクラスのメンバの、ロガーなどを参照するコードを量産してしまってえらくハマってしまった経験があります。
+一方、これらのメソッドに渡すクロージャから Serializable でないクラスのメンバの、ロガーや設定値を参照するコードを量産してしまってえらくハマってしまった経験があります。
 もしみなさんが ETL 処理を Scala で記述する際に、同じ轍を踏まないことを祈っております。
 この記事が少しでもそのための役に立てれば幸いです。
 
