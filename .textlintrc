@@ -5,7 +5,8 @@
     "rules": {
         "no-mix-dearu-desumasu": true,
         "preset-ja-technical-writing": {
-          "no-exclamation-question-mark": false
+          "no-exclamation-question-mark": false,
+          "no-doubled-joshi": false
         }
     },
     "filters": {

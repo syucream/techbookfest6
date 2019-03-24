@@ -1,4 +1,4 @@
-= Rust で ffi で FUSE ライブラリを自作する
+= Rust で ffi を使って FUSE ライブラリを自作する
 
 こんにちは、はじめまして、 @syu_cream です。
 好きなスイーツはおはぎです。
@@ -6,8 +6,8 @@
 
 == はじめに
 
-Rust は Firefox などの開発元としてよく知られる Mozilla が開発しているモダンなプログラミング言語です。
-新し目のプログラミング言語なだけあって、最近台頭してきた言語によくあるような以下のような機能を持っています。
+Rust @<fn>{rust} は Firefox などの開発元としてよく知られる Mozilla が開発しているモダンなプログラミング言語です。
+新しめのプログラミング言語なだけあって、最近台頭してきた言語によくあるような以下のような機能を持っています。
 
  * パターンマッチ
  * null 安全な型 Option
@@ -21,18 +21,26 @@ Rust は Firefox などの開発元としてよく知られる Mozilla が開発
  * シンプルな ffi による C, C++ 関数の呼び出し
  * unsafe ブロックによる柔軟で明示的な危険な操作(ポインタのデリファレンスや C, C++関数呼び出しなど)
 
-これらの機能により C, C++ などより安全にシステムプログラミングが可能であり、かつ既存の C, C++ の資産を利用可能なプログラミング言語です。
+これらの機能により C, C++ などより安全にシステムプログラミングが可能であり、かつ既存の C, C++ の資産を利用可能です。
 
 本記事では Rust で ffi で C, C++ の資産を利用するコードを書いてみます。
 ここでは FUSE(Filesystem in UserSpace) のライブラリである libfuse のハイレベル API のラッパーライブラリを作ってみます。
 
+//footnote[rust][Rust: https://www.rust-lang.org/]
 
-== FUSE(Filesystem in UserSpace)  について
+== FUSE  について
 
-FUSE はユーザスペースで安全かつ気軽に独自のファイルシステムを動作させるための仕組みです。
+FUSE(Filesystem in UserSpace) はユーザスペースで安全かつ簡単に独自のファイルシステムを動作させるための仕組みです。
 
 独自にファイルシステムを作る場合、従来はカーネルレベルのプログラミングが必要で、実装やデバッグが大変だったり導入障壁が高かったりなどの問題がありました。
-FUSE ではユーザスペースで動作するプログラムを記述することになるので、カーネルプログラミングを意識せずデバッグの容易性も上がります。
+FUSE ではユーザスペースで動作するプログラムを記述することになるので、カーネルプログラミングをせずデバッグの容易性も上がります。
+
+FUSE を使った実際のプロダクトには例えば以下のようなものが挙げられます。
+
+ * sshfs @<fn>{sshfs}
+ * s3fs @<fn>{s3fs}
+ * gcsfuse @<fn>{gcsfuse}
+ * google-drive-ocamlfuse @<fn>{google_drive_ocamlfuse}
 
 Linux における FUSE の構成としては、 FUSE のカーネルモジュールとそれをユーザスペースから使いやすくするライブラリ @<fn>{libfuse} の 2 コンポーネントから構成されます。
 FUSE を使ったアプリケーションの多くはこの libfuse のインタフェースを利用してファイルシステムを構築したものになります。
@@ -46,6 +54,10 @@ libfuse にはハイレベル API とローレベル API が存在します。
 またハイレベル API ではコールバック関数をリターンする際にその処理を終えるモデルになるのに対して、ローレベル API ではそうではなく明示的に処理を終えてレスポンスを返すモデルになります。
 ちなみに Web に存在する FUSE アプリケーションの参考例は、実装の容易性などからハイレベル API を用いたものの方が多く見つかることでしょう。
 
+//footnote[sshfs][sshfs: https://github.com/libfuse/sshfs]
+//footnote[s3fs][s3fs: https://github.com/s3fs-fuse/s3fs-fuse]
+//footnote[gcsfuse][gcsfuse: https://github.com/GoogleCloudPlatform/gcsfuse/]
+//footnote[google_drive_ocamlfuse][google-drive-ocamlfuse: https://github.com/astrada/google-drive-ocamlfuse]
 //footnote[libfuse][libfuse: https://github.com/libfuse/libfuse]
 //footnote[osxfuse][FUSE for macOS: https://osxfuse.github.io/]
 
@@ -53,8 +65,9 @@ libfuse にはハイレベル API とローレベル API が存在します。
 == C++ ではじめる FUSE
 
 Rust で ffi を使う上で、 C, C++ として利用する構造体や関数などがどのような構成になっているかを知ることは重要になります。
-ここではいきなり Rust のコードを書くのではなく、 C++ で "Hello, World!" を表示するだけのシンプルな FUSE アプリケーションを作ってみましょう。
-（C++ を用いる強い理由はありません。単純に C のサンプルは既に数多く Web 上にあるため参考として C++ で実装してみた次第です）
+まずは Rust でコードは書かずに、 C++ で "Hello, World!" を表示するだけのシンプルな FUSE アプリケーションを作ってみましょう。
+ここで C++ を用いる強い理由はありません。
+C のサンプルは既に Web 上に数多く存在するので、参考として C++ で実装してみました！
 
 === Hello, FUSE! in C++
 
@@ -153,16 +166,18 @@ int main(int argc, char *argv[]) {
 === FUSE アプリケーションの動作確認方法
 
 このサンプルをコンパイルする時には例えば以下のようにします。
-このサンプルでは constexpr や auto など C++11 以降の機能を使っているため、 --std=c++0x のように C++11 以降を使うことを明示します。
-また FUSE のバージョンは今回は筆者の環境では 29 を指定しました。
-FUSE の共有ライブラリとヘッダのパスですが、 pkg-config を介して指定します。
-pkg-config を用いることは必須では無いのですが、特に macOS を用いる場合は osxfuse のパスを指定する必要があるなど手動指定だとハマりどころが多いため、 pkg-config を用いてしまうのがシンプルで済むと思われます。
-余談ですが libfuse と osxfuse はシグネチャとしてはほぼ同じになり、内容によっては osxfuse にリンクする想定のはずが libfuse にリンクしてしまえる場合があります。
-筆者はそれに気づかず多少の時間を無駄に費やしました。
 
 //cmd{
 $ g++ -Wall hello.cpp --std=c++0x -DFUSE_USE_VERSION=29 `pkg-config fuse --cflags --libs` -o hello
 //}
+
+constexpr や auto など C++11 以降の機能を使っているため、 --std=c++0x のように C++11 以降を使うことを明示します。
+また FUSE のバージョンは今回は筆者の環境では 29 を指定しました。
+FUSE の共有ライブラリとヘッダのパスには pkg-config を介して指定します。
+pkg-config を用いることは必須ではありません。
+しかし、特に macOS を用いる場合は osxfuse のパスを指定する必要があるなど手動指定だとハマりどころが多いため、 pkg-config を用いてしまうのがシンプルで済むと思われます。
+余談ですが libfuse と osxfuse はシグネチャとしてはほぼ同じになり、内容によっては osxfuse にリンクする想定のはずが libfuse にリンクしてしまえる場合があります。
+筆者はそれに気づかず多少の時間を無駄に費やしました。
 
 次にこの hello ファイルシステムを実際にマウントしてみます。
 ここでは適当に tmp ディレクトリを作成し、それにマウントしてみました。
@@ -182,7 +197,7 @@ $ cat tmp/hello
 Hello, World!
 //}
 
-== RUST でやるFUSE
+== RUST ではじめる FUSE
 
 C++ での FUSE アプリケーションプログラミングの流れもあらかたつかめたところで、お待ちかねの Rust でのコーディングに入ってみましょう。
 
@@ -202,9 +217,9 @@ rust-fuse としては、 C 実装のハイレベル API を直接呼び出す�
 一方で今回は libfuse で持っているハイレベル API の C 実装を素直に Rust から呼び出すことに注力します。
 ウェブでよく散見される libfuse を用いたファイルシステムの実装はハイレベル API を前提にしているものが多く、 libfuse 公式のサンプルコードもハイレベル API を利用していることから、ハイレベル API を Rust 向けに提供することに一定の価値があるものと思われます。
 
-今回の Rust FUSE ライブラリは rust-fuse と親しい機能を持ちながらハイレベル API に対する着想が異なることから、 yarf(Yet Another Rust Fuse) と名付けます。
+今回の Rust FUSE ライブラリは rust-fuse と親しい機能を持ちながら思想がやや異なることから、 yarf(Yet Another Rust Fuse) と名付けます。
 
-=== Rust でやる ffi
+=== Rust ではじめる ffi
 
 さて、 Rust でそもそもどのように C あるいは C++ のライブラリを扱うことができるのでしょうか？
 
@@ -251,8 +266,20 @@ extern "C" fn anycallback(id: c_int, name: *const c_char) -> c_void
 
 次に、 Rust で ffi で libfuse を利用する流れを考えます。
 
-Rust の ffi を使ったライブラリの実装パターンとして、よく C, C++ の ffi のための記述だけ分離した sys クレートとそれを用いて Rust らしいなるべく安全なインタフェースを提供するクレートという二段構えがとられます。
-yarf でもそれに従い、 FUSE ハイレベル API を扱うことに注力する yarf-sys クレートとそれを用いて FUSE の各コールバック関数を trait として取り扱ったりなるべく unsafe ブロックを記述しなくて済むようにした yarf クレートを作る事にします。
+Rust の ffi を使ったライブラリの実装パターンとして、よく以下のような 2 つのクレートで構成されます。
+
+ * C, C++ の ffi のための記述だけ分離した sys クレート
+ * sys クレートを用いて Rust らしいなるべく安全なインタフェースを提供するクレート
+
+yarf でもそれに従い、@<img>{syucream1_yarf_design} に示すような構成で作っていきます。
+
+//image[syucream1_yarf_design][yarf の設計]
+
+ * FUSE ハイレベル API を扱うことに注力する yarf-sys クレート
+ * yarf-sys を用いて Rust のコーディングが容易になる yarf クレート
+ 
+yarf クレートではFUSE の各コールバック関数を trait として取り扱かいます。
+また、なるべく unsafe ブロックを記述しなくて済むようにすることを目指します。
 
 ==== yarf-sys はじめの一歩
 
@@ -314,7 +341,8 @@ extern "C" {
 }
 //}
 
-ここで #[link(name = "fuse")] アトリビュートを与えてもいいのですが、 macOS の場合は #[link(name = "osxfuse")] に置き換えたいのが悩みどころです。
+ここで #[link(name = "fuse")] アトリビュートを与えることも可能です。
+しかし macOS の場合は #[link(name = "osxfuse")] に置き換えたいのが悩みどころです。
 Rust のアトリビュートでは target_os による分岐も可能なのでここにその条件分岐を記述してもいいのですが、今回はそれを使わず、 Rust のビルドスクリプトと pkg-config クレートを使ってリンクすることにしてみます。
 これで条件付きで共有ライブラリにリンクする準備が整いました。
 
@@ -559,7 +587,7 @@ fn main() {
 }
 //}
 
-このコードをビルド可能にする Cargo.toml を記述しておいて、
+このコードをビルド可能にする Cargo.toml を記述しておいて。
 
 //source[Cargo.toml]{
 [package]
@@ -593,7 +621,8 @@ Hello, World!
 
 無事にサンプルが動作した yarf-sys クレートですが、ポインタの取り回しやそれ起因で unsafe ブロックが多用されている状態です。
 またコールバック関数をひたすら並べるという C++ で libfuse を直接使っていた時と状況が変わっていないのがいまいちイケていません。
-yarf クレートではもう少し抽象化し、またある程度利用者が unsafe ブロックを書かずに済むようにしましょう。
+
+yarf クレートではこれの使いやすさを向上するため更に抽象化して、またある程度利用者が unsafe ブロックを書かずに済むようにしましょう。
 
 ここでは rust-fuse を参考にして、 libfuse のコールバック関数を trait として宣言しておいて、その各メソッドを実装することでファイルシステムが実装可能な状態を目指してみます。
 またこの trait が受け付ける引数にはなるべくポインタをそのまま渡さないことを考えます。
@@ -895,7 +924,7 @@ fn main() {
 ==== クレートを crates.io に登録してみる
 
 こうしてある程度使い物になってきたであろうクレートを腐らせてしまうのも気が引けます。
-ここでは勇気を出して crates.io にクレートを公開してみます。
+ここでは勇気を出して crates.io @<fn>{crates_io} にクレートを公開してみます。
 
 まず https://crates.io/ にアクセスして GitHub アカウントでログインしてみましょう。
 その後 @<img>{syucream1_crates_io_01} のような Account Settings 画面に遷移して、 User Email が設定されていなければ設定しておきましょう。
@@ -922,6 +951,16 @@ See http://doc.crates.io/manifest.html#package-metadata for more info.
 
 うまくいけば crates.io に自分のクレートのページが生成されるはずです。
 
+無事に crates.io にクレートが公開できれば、後は Cargo.toml に依存関係を記述して利用できるようになります！
+
+//source[Cargo.toml]{
+...
+[dependencies]
+yarf = "0.0.2"
+...
+//}
+
+//footnote[crates_io][crates.io: https://crates.io/]
 //image[syucream1_crates_io_01][crates.io Account Settings][scale=0.8]
 //image[syucream1_crates_io_02][crates.io Tokens][scale=0.8]
 
@@ -943,7 +982,7 @@ yarf クレートを作るにあたっては Rust の変数のライフタイム
 == まとめ
 
 以上、 Rust で ffi で libfuse の バインディングクレートを作るお話でした。
-Rust で、特に ffi を使って C, C++ 実装に配慮しつつ恐怖をいだきながら unsafe ブロックで囲むのは、 Rust をライトに使う限りはそう多くない気もしています。
+今回のような C, C++ 実装に配慮しつつ恐怖をいだきながら unsafe ブロックで囲む機会はそう多くない気もしています。
 しかしながらこれらの使い方や挙動を知っておくことは、自身で新たな Rust バインディングを書きたくなった場合や、既存のクレートのトラブルシュートをする時に有用だと思われます。
 
 こうして Rust のある一面に触れて、強力かつ多機能であることをひしひしと感じられます。
