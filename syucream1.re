@@ -35,6 +35,13 @@ FUSE(Filesystem in UserSpace) はユーザスペースで安全かつ簡単に�
 独自にファイルシステムを作る場合、従来はカーネルレベルのプログラミングが必要で、実装やデバッグが大変だったり導入障壁が高かったりなどの問題がありました。
 FUSE ではユーザスペースで動作するプログラムを記述することになるので、カーネルプログラミングをせずデバッグの容易性も上がります。
 
+FUSE を使った実際のプロダクトには例えば以下のようなものが挙げられます。
+
+ * sshfs @<fn>{sshfs}
+ * s3fs @<fn>{s3fs}
+ * gcsfuse @<fn>{gcsfuse}
+ * google-drive-ocamlfuse @<fn>{google_drive_ocamlfuse}
+
 Linux における FUSE の構成としては、 FUSE のカーネルモジュールとそれをユーザスペースから使いやすくするライブラリ @<fn>{libfuse} の 2 コンポーネントから構成されます。
 FUSE を使ったアプリケーションの多くはこの libfuse のインタフェースを利用してファイルシステムを構築したものになります。
 また Linux の他にも macOS 向けに libfuse を使えるようにした FUSE for macOS(osxfuse) @<fn>{osxfuse} も存在して、 macOS ユーザも気軽に FUSE アプリケーションを開発・利用できます。
@@ -47,6 +54,10 @@ libfuse にはハイレベル API とローレベル API が存在します。
 またハイレベル API ではコールバック関数をリターンする際にその処理を終えるモデルになるのに対して、ローレベル API ではそうではなく明示的に処理を終えてレスポンスを返すモデルになります。
 ちなみに Web に存在する FUSE アプリケーションの参考例は、実装の容易性などからハイレベル API を用いたものの方が多く見つかることでしょう。
 
+//footnote[sshfs][sshfs: https://github.com/libfuse/sshfs]
+//footnote[s3fs][s3fs: https://github.com/s3fs-fuse/s3fs-fuse]
+//footnote[gcsfuse][gcsfuse: https://github.com/GoogleCloudPlatform/gcsfuse/]
+//footnote[google_drive_ocamlfuse][google-drive-ocamlfuse: https://github.com/astrada/google-drive-ocamlfuse]
 //footnote[libfuse][libfuse: https://github.com/libfuse/libfuse]
 //footnote[osxfuse][FUSE for macOS: https://osxfuse.github.io/]
 

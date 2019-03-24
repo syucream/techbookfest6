@@ -102,7 +102,7 @@ Serializable インタフェースは、単なる「そのクラスはシリア�
 シリアライズ対象のオブジェクトのクラス自体が Serializable であることと、そこから参照されるメンバがすべて Serializable であれば、そのオブジェクトが実際にシリアライズできます。
 
 また Scala において case class や case object を使うと、そのクラスは Serializable が自動的に mixin されます。
-この挙動は普段あまり意識することが無いかも知れませんが、 Scala で Serializable が要求されるシーンでは重要なノウハウになってきます。
+この挙動は普段あまり意識することが無いかも知れませんが、 Scala で Serializable が要求されるシーンではしばしば重要なノウハウになるでしょう。
 
 ===[/column]
 
@@ -321,7 +321,177 @@ object ClosureSpec {
 ...
 //}
 
-2つ目は、 Serializable でないクラスのメンバを直接参照するのをやめてブロック内で再定義しておくケースです。
+ちなみに、どうしてメンバをシングルトンオブジェクトに持たせることでシリアライズ可能になったのでしょうか。
+ここでは case object ではなく object を使って定義しているため、 Serializable は mixin されません。
+この謎を Scala のコードをデコンパイルして追ってみます。
+
+まずシンプルな再現用コードを Scala で記述します。
+前述の通り、シングルトンオブジェクトを参照するだけのクロージャはシリアライズ可能です。
+
+//source[to_serializable01_01.scala]{
+import java.io.{ByteArrayOutputStream, ObjectOutputStream}
+
+object Closure4 {
+  def main(args: Array[String]) {
+    val myClosure = new MyClosure
+
+    DefaultSerializer.serialize(myClosure.serializable)  // => passed!
+    DefaultSerializer.serialize(myClosure.notSerializable)  // => failed...
+  }
+}
+
+class MyClosure {
+  import MyClosure._
+
+  private val value = 1
+
+  def notSerializable = () => value
+  def serializable = () => valueInObject
+}
+
+object MyClosure {
+  val valueInObject = 1
+}
+
+object DefaultSerializer {
+
+  def serialize(data: AnyRef): Array[Byte] = {
+    val buffer = new ByteArrayOutputStream()
+    val outStream = new ObjectOutputStream(buffer)
+    outStream.writeObject(data)
+
+    buffer.toByteArray
+  }
+
+}
+//}
+
+一旦コンパイルしてクラスファイルを生成した後、デコンパイルしてどんな Java のコードになるか確認してみます。
+ここではデコンパイラとして Intellij の Fernflower @<fn>{fernflower} を用います。
+Fernflower は入力として jar ファイルを取るので一旦 scalac で上記コードから jar ファイルを生成しておきます。
+
+//cmd{
+# コンパイル
+$ scalac closure4.scala -d closure4.jar
+# デコンパイル
+$ java -jar ~/path/to/fernflower.jar ~/path/to/closure4.jar tmp
+//}
+ 
+デコンパイル後の Java のコードは以下のようになっていました。
+注目すべきは class 内で宣言したメンバの参照時には this を参照し、 object 内で宣言したメンバの参照には予め生成されたシングルトンオブジェクトを参照することです。
+前者の場合 this をシリアライズ対象のクロージャ内で参照してしまうため this が Serializable であることが求められてしまうわけですね。
+
+//source[to_serializable01_02.java]{
+public class MyClosure {
+   private final int value = 1;
+
+   ...
+
+   public Function0 notSerializable() {
+      return () -> {
+         return this.value();
+      };
+   }
+
+   public Function0 serializable() {
+      return () -> {
+         return MyClosure$.MODULE$.valueInObject();
+      };
+   }
+}
+...
+public final class MyClosure$ {
+   public static MyClosure$ MODULE$;
+   private final int valueInObject;
+
+   static {
+      new MyClosure$();
+   }
+
+   public int valueInObject() {
+      return this.valueInObject;
+   }
+
+   private MyClosure$() {
+      MODULE$ = this;
+      this.valueInObject = 1;
+   }
+}
+//}
+
+シングルトンオブジェクトを参照することでシリアライズ可能にする Java のコードも、直接書いて確認してみました。
+以下の例において serialize() はシリアライズが可能なのですが、やはり notSerializable() ではシリアライズに失敗します。
+
+//source[to_serializable01_03.java]{
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.function.Supplier;
+
+class Closure4 {
+  public static void main(String[] args) {
+    MyClosure myClosure = new MyClosure();
+
+    try {
+      DefaultSerializer.serialize(myClosure.serializable());
+      DefaultSerializer.serialize(myClosure.notSerializable());
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
+  }
+}
+
+interface SerializableSupplier<T> extends Supplier<T>, Serializable {};
+
+class MyClosure {
+  private final int value = 1;
+
+  public SerializableSupplier<Integer> notSerializable() {
+    return () -> {
+      return this.value;
+    };
+  }
+
+  public SerializableSupplier<Integer> serializable() {
+    return () -> {
+      return MyClosureObject.getInstance().valueInObject();
+    };
+  }
+}
+
+final class MyClosureObject {
+  private static MyClosureObject instance;
+  private int valueInObject = 1;
+
+  static {
+    instance = new MyClosureObject();
+  }
+
+  public static MyClosureObject getInstance() {
+    return instance;
+  }
+
+  public int valueInObject() {
+    return instance.valueInObject;
+  }
+}
+
+class DefaultSerializer {
+  public static byte[] serialize(Object data) throws IOException {
+    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    ObjectOutputStream outStream = new ObjectOutputStream(buffer);
+    outStream.writeObject(data);
+
+    return buffer.toByteArray();
+  }
+}
+
+//}
+
+//footnote[fernflower][Fernflower: https://github.com/JetBrains/intellij-community/tree/master/plugins/java-decompiler/engine]
+
+話を戻して、シリアライズ可能にする方法の 2つ目は、 Serializable でないクラスのメンバを直接参照せずブロック内で再定義しておくケースです。
 メンバがもともと Serializable な型であればこれで回避可能です。
 例えば以下のようにします。
 
@@ -476,13 +646,15 @@ class ClosureSpec extends FlatSpec with Matchers {
 //}
 
 Apache Spark では以前より、このようなシリアライズに関する問題の緩和策として、 ClosureCleaner @<fn>{closurecleaner} というクロージャをクリンナップする仕組みを設けていました。
+ちなみにこれと同じ機構が Twitter の Chill @<fn>{chill} ライブラリや Apache Flink @<fn>{flink} にも存在するようです。
+
+===[/column]
 
 //footnote[scala212][Scala 2.12: https://www.scala-lang.org/news/2.12.0/]
 //footnote[scala212_lambda_capturing][Scala 2.12 lambda: https://www.scala-lang.org/news/2.12.0/#lambdas-capturing-outer-instances]
 //footnote[closurecleaner][ClosureCleaner: https://www.quora.com/Apache-Spark/What-does-Closure-cleaner-func-mean-in-Spark]
-
-===[/column]
-
+//footnote[chill][chill: https://github.com/twitter/chill]
+//footnote[flink][Apache Flink: https://flink.apache.org/]
 
 == おわりに
 
