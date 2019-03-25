@@ -2,11 +2,18 @@
 
 こんにちは、はじめまして、 @syu_cream です。
 好きなスイーツはおはぎです。
-この記事では Rust でコーディングした結果をつらつら書いていって、ハマった点やあまり Web で見られないノウハウについてお伝えできればと思っています。
+
+この記事では Rust で ffi(Foreign Function Interface) を使ってライブラリを書いてみた知見について書きます。
+今回は libfuse のオレオレライブラリを実装した上で得たノウハウをテーマにします。
+また、読者がある程度 Rust でコーディングした事がある前提で執筆しております。
+あらかじめご了承ください。
+
+この記事が、あなたの Rust ハックライフのお役に立てれば光栄です。
+
 
 == はじめに
 
-Rust @<fn>{rust} は Firefox などの開発元としてよく知られる Mozilla が開発しているモダンなプログラミング言語です。
+Rust @<fn>{rust} は Firefox の開発元としてよく知られる Mozilla が開発しているモダンなプログラミング言語です。
 新しめのプログラミング言語なだけあって、最近台頭してきた言語によくあるような以下のような機能を持っています。
 
  * パターンマッチ
@@ -15,8 +22,8 @@ Rust @<fn>{rust} は Firefox などの開発元としてよく知られる Mozil
 
 また Rust の特徴的な機能として以下も挙げられます。
 
- * デフォルトムーブな変数所有権の扱いや借用
- * コンパイル時のレースコンディションのチェック
+ * デフォルトで所有権が移動するムーブセマンティクスベースの変数所有権
+ * 借用とミュータビリティの管理によるコンパイル時のデータ競合チェック
  * 変数のライフタイムの管理
  * シンプルな ffi による C, C++ 関数の呼び出し
  * unsafe ブロックによる柔軟で明示的な危険な操作(ポインタのデリファレンスや C, C++関数呼び出しなど)
@@ -35,7 +42,8 @@ FUSE(Filesystem in UserSpace) はユーザスペースで安全かつ簡単に�
 独自にファイルシステムを作る場合、従来はカーネルレベルのプログラミングが必要で、実装やデバッグが大変だったり導入障壁が高かったりなどの問題がありました。
 FUSE ではユーザスペースで動作するプログラムを記述することになるので、カーネルプログラミングをせずデバッグの容易性も上がります。
 
-FUSE を使った実際のプロダクトには例えば以下のようなものが挙げられます。
+FUSE を使って実装されたプロダクトも世の中に幾つか存在します。
+有名なものだと、例えば以下のようなものが挙げられます。
 
  * sshfs @<fn>{sshfs}
  * s3fs @<fn>{s3fs}
@@ -206,11 +214,12 @@ C++ での FUSE アプリケーションプログラミングの流れもあら�
 ==== 既存の Rust FUSE ライブラリについて
 
 そういえば Rust で FUSE を扱うための既存ライブラリは無いのでしょうか？
-実はちょうどそれに当たる @<fn>{rustfuse} が存在します。
+実はちょうどそれに当たる rust-fuse @<fn>{rustfuse} が存在します。
 しかしながら rust-fuse はローレベル API だけをターゲットにしており、より抽象化されているハイレベル API を Rust から使用する手段は今の所ありません。
-rust-fuse としては、 C 実装のハイレベル API を直接呼び出すよりはローレベル API を利用するハイレベル API を Rust で実装するほうが Rust の良さを活かせるため、やるならそうすべきとの構想があるようです。
+rust-fuse としては、 C 実装のハイレベル API を直接呼び出すよりは Rust で実装しなおすほうが Rust の良さを活かせるため、やるならそうすべきとの構想があるようです。@<fn>{rustfuse_todo} 
 
 //footnote[rustfuse][rust-fuse: https://github.com/zargony/rust-fuse]
+//footnote[rustfuse_todo][rust-fuse TODO: https://github.com/zargony/rust-fuse#to-do]
 
 ==== 今回自作する Rust FUSE ライブラリ
 
@@ -219,7 +228,7 @@ rust-fuse としては、 C 実装のハイレベル API を直接呼び出す�
 
 今回の Rust FUSE ライブラリは rust-fuse と親しい機能を持ちながら思想がやや異なることから、 yarf(Yet Another Rust Fuse) と名付けます。
 
-=== Rust ではじめる ffi
+== Rust ではじめる ffi
 
 さて、 Rust でそもそもどのように C あるいは C++ のライブラリを扱うことができるのでしょうか？
 
@@ -252,7 +261,7 @@ extern "C" {
 }
 //}
 
-また C のライブラリ内から Rust の関数をコールバック呼び出すする際には、 Rust の関数側に extern "C" 指定が必要になります。
+また C のライブラリ内から Rust の関数をコールバック呼び出す際には、 Rust の関数側に extern "C" 指定が必要になります。
 
 //source[callback_c.rs]{
 extern "C" fn anycallback(id: c_int, name: *const c_char) -> c_void
@@ -262,11 +271,11 @@ extern "C" fn anycallback(id: c_int, name: *const c_char) -> c_void
 
 このような多少の準備は必要なものの、 Rust と C の相互利用はこれで可能になります。
 
-=== yarf の実装の流れ
+== yarf の実装の流れ
 
 次に、 Rust で ffi で libfuse を利用する流れを考えます。
 
-Rust の ffi を使ったライブラリの実装パターンとして、よく以下のような 2 つのクレートで構成されます。
+Rust の ffi を使ったライブラリの実装パターンとして、よく以下のような 2 つのクレートで構成されます。 @<fn>{rust_sys_crate}
 
  * C, C++ の ffi のための記述だけ分離した sys クレート
  * sys クレートを用いて Rust らしいなるべく安全なインタフェースを提供するクレート
@@ -281,7 +290,9 @@ yarf でもそれに従い、@<img>{syucream1_yarf_design} に示すような構
 yarf クレートではFUSE の各コールバック関数を trait として取り扱かいます。
 また、なるべく unsafe ブロックを記述しなくて済むようにすることを目指します。
 
-==== yarf-sys はじめの一歩
+//footnote[rust_sys_crate][rust-sys-crate: https://kornel.ski/rust-sys-crate]
+
+== yarf-sys クレートの実装
 
 それでは yarf-sys を実装していきます。
 この作業は前述の ffi の Rust のコードを、 C++ のサンプルで使ったような fuse_operations 構造体や, fuse_main() 関数など必要なパートを実装していくことで進めます。
@@ -364,7 +375,7 @@ fn main() {
 
 //}
 
-==== bindgen の利用
+=== bindgen の利用
 
 Rust で ffi を行うのはこのような作業で単純に実行できるのですが、中身としては純粋に "作業" と言えそうな内容です。
 それゆえ手動で ffi をする準備のコードを記述するのは面倒に思えたり、シグネチャの書き間違いや定義漏れなどを生む可能性もあります。
@@ -392,7 +403,7 @@ bindgen が出力したコードは、一部 link_name アトリビュートが�
 
 //footnote[bindgen][bindgen: https://github.com/rust-lang/rust-bindgen]
 
-==== サンプルコードの記述
+=== サンプルコードの記述
 
 ここまで来れば最低限 Rust から FUSE ハイレベル API が扱えるようになっているはずです。
 yarf クレートの開発に着手する前に折角ですので、 yarf-sys クレートで hello サンプルコードを実装してみます。
@@ -617,7 +628,7 @@ $ cat tmp/hello
 Hello, World!
 //}
 
-==== yarf クレートの実装
+== yarf クレートの実装
 
 無事にサンプルが動作した yarf-sys クレートですが、ポインタの取り回しやそれ起因で unsafe ブロックが多用されている状態です。
 またコールバック関数をひたすら並べるという C++ で libfuse を直接使っていた時と状況が変わっていないのがいまいちイケていません。
@@ -653,7 +664,7 @@ impl FileSystem for HelloFS {
             ...
 //}
 
-==== yarf でのコールバック関数
+=== yarf でのコールバック関数
 
 まず yarf-sys を使って libfuse からのコールバックを受け付ける関数を定義していきます。
 ここでは単純に <FUSEの操作名>_proxy という関数をひたすら地道に生やしていくことにします。
@@ -690,7 +701,7 @@ let ops = fuse_operations {
 // この後は Hello, World! サンプルとほぼ一緒
 //}
 
-==== FileSystem trait を実装する構造体の引き回し
+=== FileSystem trait を実装する構造体の引き回し
 
 コールバック関数が呼び出された後に悩ましいのが、どのように FileSystem trait を実装する構造体を取り出すかです。
 コールバック関数は C で実装された libfuse を介して呼び出されますし、引数に任意のパラメータを取る仕組みも無さそうです。
@@ -752,11 +763,15 @@ fn get_filesystem() -> Option<Box<FileSystem>> {
 
 これで Rust で記述された FileSystem trait の実装を取ることができるようになりました。
 
-==== unsafe な処理の隠蔽
+=== unsafe な処理の隠蔽
 
 取り出した FileSystem trait のメソッドには、なるべく Rust フレンドリーで安全な値を渡してあげたいものです。
-ここでは幾つかの場合に分けて、 yarf クレート側で unsafe な処理をしてあげることにします。
-ここでは *const c_char な値の扱い、 *mut な値の扱い、バッファの扱い、関数ポインタの扱いの四種類をピックアップしていきます。
+ここでは以下の 4 パターンに分けて、 yarf クレート側で unsafe な処理をしてあげることにします。
+
+ * *const c_char な値の扱い
+ * *mut な値の扱い
+ * バッファの扱い
+ * 関数ポインタの扱い
 
 *const c_char 型の値はかなり多く、 yarf-sys というか libfuse ハイレベル API の第一引数のほとんどがこれです。
 実体は NULL 終端されたファイルパスやファイル名の文字列です。
@@ -829,7 +844,7 @@ impl ReadDirFiller {
 
 これらにより、おおむね unsafe な操作を除外できました。
 
-==== サンプルコードの記述
+=== サンプルコードの記述
 
 改めて yarf クレートを利用して Hello, World! サンプルを実装してみます。
 以下のように unsafe を書かず、記述量も減らしつつサンプルの実装が行えています！
@@ -921,7 +936,9 @@ fn main() {
 }
 //}
 
-==== クレートを crates.io に登録してみる
+これにより Rust らしいコードで libfuse のハイレベル API を利用したファイルシステムの実装が可能になりそうです！
+
+=== クレートを crates.io に登録してみる
 
 こうしてある程度使い物になってきたであろうクレートを腐らせてしまうのも気が引けます。
 ここでは勇気を出して crates.io @<fn>{crates_io} にクレートを公開してみます。
@@ -964,22 +981,7 @@ yarf = "0.0.2"
 //image[syucream1_crates_io_01][crates.io Account Settings][scale=0.8]
 //image[syucream1_crates_io_02][crates.io Tokens][scale=0.8]
 
-== 反省点や知見など
-
-今回ネタにした Rust で ffi して libfuse とやり取りするクレートを作成するのは、その性質に沿ったハマりどころがありました。
-やはり C のライブラリを ffi で呼ぶ都合、 #[repr(C)] アトリビュートを付与した Rust の構造体が C 側でどう扱われるかは意識する必要があります。
-途中、 fuse_operations 構造体を Rust 側で部分的にしかメンバを定義しておらず、 libfuse 側でコールバック関数を呼び出す際に別メンバを参照しに行って結果コールバック関数が未実装と言われるなどのトラブルに見舞われました。
-また地味な点ですが、 8 進数リテラルが C++ では prefix が '0' だったのが Rust では '0o' なのに少々悩まされました。
-yarf クレートを作るにあたっては Rust の変数のライフタイムと libfuse が管理するポインタの扱いなどには悩まされました。
-
-今回のクレートのデバッグには主に rust-lldb を使っていました。
-また、 rustfmt @<fn>{rustfmt} や rust-clippy @<fn>{rust-clippy} にはお世話になりました。
-さらに余談ですが、エディタとしては CLion + Rust plugin を使っていました。シンタックスハイライトや補完が思いの外動いて快適です。
-
-//footnote[rustfmt][rustfmt: https://github.com/rust-lang/rustfmt]
-//footnote[rust-clippy][rust-clippy: https://github.com/rust-lang/rust-clippy]
-
-== まとめ
+== 反省点やまとめ
 
 以上、 Rust で ffi で libfuse の バインディングクレートを作るお話でした。
 今回のような C, C++ 実装に配慮しつつ恐怖をいだきながら unsafe ブロックで囲む機会はそう多くない気もしています。
@@ -988,3 +990,17 @@ yarf クレートを作るにあたっては Rust の変数のライフタイム
 こうして Rust のある一面に触れて、強力かつ多機能であることをひしひしと感じられます。
 他方、使いこなすのに修練が必要だとも思われます。
 安全で高速で美しい Rust のコードを生み出すためにも、みなさんも一緒に精進していきましょう！
+
+余談ですが、今回ネタにした Rust で ffi して libfuse とやり取りするクレートを作成するのは、その性質に沿ったハマりどころがありました。
+やはり C のライブラリを ffi で呼ぶ都合、 #[repr(C)] アトリビュートを付与した Rust の構造体が C 側でどう扱われるかは意識する必要があります。
+途中、 fuse_operations 構造体を Rust 側で部分的にしかメンバを定義しておらず、 libfuse 側でコールバック関数を呼び出す際に別メンバを参照しに行って結果コールバック関数が未実装と言われるなどのトラブルに見舞われました。
+また地味な点ですが、 8 進数リテラルが C++ では prefix が '0' だったのが Rust では '0o' なのに少々悩まされました。
+yarf クレートを作るにあたっては Rust の変数のライフタイムと libfuse が管理するポインタの扱いなどには悩まされました。
+
+また、今回のクレートのデバッグには主に rust-lldb を使っていました。
+そのほか rustfmt @<fn>{rustfmt} や rust-clippy @<fn>{rust-clippy} にはお世話になりました。
+エディタとしては CLion + Rust plugin を使っていました。シンタックスハイライトや補完が思いの外動いて快適です。
+
+//footnote[rustfmt][rustfmt: https://github.com/rust-lang/rustfmt]
+//footnote[rust-clippy][rust-clippy: https://github.com/rust-lang/rust-clippy]
+

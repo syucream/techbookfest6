@@ -1,8 +1,10 @@
 = Scala とクロージャと分散処理
 
 こんにちは、はじめまして、 @syu_cream です。
-シュークリームは、そんなに好きな訳ではありません
-この記事では Scala でコーディングした結果をつらつらとお伝えします。
+シュークリームは、そんなに好きな訳ではありません。
+
+この記事では Scala で分散処理をする場合にしばしばハマりがちなシリアライズ問題について記述します。
+Hadoop エコシステムなどを触れる方や単純に Scala でのコーディングに興味のある方の刺激になれば幸いです。
 
 
 == はじめに
@@ -27,6 +29,35 @@ JVM を動作ターゲットプラットフォームとしており既存の Jav
 本記事では特に分散処理において Scala で処理を記述する時に生じる、クロージャとそれが Serializable であることを担保する際に生じる課題についてつらつらと記述します。
 
 //footnote[scala][Scala: https://www.scala-lang.org/]
+
+
+== Scala と分散処理
+
+まず、 Scala とビッグデータの分散処理フレームワークについて考えてみます。
+Hadoop エコシステムは多くの場合 JVM を実行環境としており、特に Apache Spark @<fn>{apache_spark} はそれ自体が Scala で記述されていることもあり、しばしば分散処理のコードを Scala で実装することもあるでしょう。
+
+Apache Spark, あるいは Apache Beam @<fn>{apache_beam} などで分散処理を記述する場合、各処理が Serializable であることを要求されます。
+これは @<img>{syucream2_serialized_tasks} のようなイメージで各処理をシリアライズして各ワーカに配布して分散処理が可能にするためです。
+
+//image[syucream2_serialized_tasks][分散処理とシリアライズ][scale=0.8]
+
+ただしこの Serializable の担保は余程気をつけてコーディングしないとハマることが多々あると思われます。
+特に後述する Scala のクロージャのような機構を使用する場合には、 Serializable にするにはどうすればいいのか、そもそも何が原因で Serializable にならないのかを確認するのが困難になることもあるでしょう。
+
+//footnote[apache_spark][Apache Spark: https://spark.apache.org/]
+//footnote[apache_beam][Apache Beam: https://beam.apache.org/]
+
+===[column] Serializable インタフェースと Scala
+
+不要だと思われますが、 Serializable インタフェースと Scala のクラスについて確認しておきます。
+Serializable インタフェースは、単なる「そのクラスはシリアライズ可能だよ」と伝えるためのマークです。
+何らかのメソッドの実装を要求したりしません。
+シリアライズ対象のオブジェクトのクラス自体が Serializable であることと、そこから参照されるメンバがすべて Serializable であれば、そのオブジェクトが実際にシリアライズできます。
+
+また Scala において case class や case object を使うと、そのクラスは Serializable が自動的に mixin されます。
+この挙動は普段あまり意識することが無いかも知れませんが、 Scala で Serializable が要求されるシーンではしばしば重要なノウハウになるでしょう。
+
+===[/column]
 
 
 == Scala のクロージャ
@@ -80,37 +111,13 @@ case class MyLogger() {
 }
 //}
 
-
-== Scala と分散処理
-
-クロージャから視点を少し外し、 Scala と分散処理フレームワークについて考えてみます。
-Hadoop エコシステムは多くの場合 JVM を実行環境としており、特に Apache Spark @<fn>{apache_spark} はそれ自体が Scala で記述されていることもあり、しばしば分散処理のコードを Scala で実装することもあるでしょう。
-
-Apache Spark, あるいは Apache Beam @<fn>{apache_beam} などで分散処理を記述する場合、各処理が Serializable であることを要求されます。
-これは @<img>{syucream2_serialized_tasks} のようなイメージで各処理をシリアライズして各ワーカに配布して分散処理が可能にするためです。
-
-//image[syucream2_serialized_tasks][分散処理とシリアライズ][scale=0.8]
-
-ただしこの Serializable の担保は余程気をつけてコーディングしないとハマることが多々あると思われます。
-特に Scala のクロージャのような自由変数を気軽に参照する場合には、 Serializable にするにはどうすればいいのか、そもそも何が原因で Serializable にならないのかを確認するのが困難になることもあるでしょう。
-
-//footnote[apache_spark][Apache Spark: https://spark.apache.org/]
-//footnote[apache_beam][Apache Beam: https://beam.apache.org/]
-
-===[column] Serializable インタフェースと Scala
-
-不要だと思われますが、 Serializable インタフェースと Scala のクラスについて確認しておきます。
-Serializable インタフェースは、単なる「そのクラスはシリアライズ可能だよ」と伝えるためのマークです。
-何らかのメソッドの実装を要求したりしません。
-シリアライズ対象のオブジェクトのクラス自体が Serializable であることと、そこから参照されるメンバがすべて Serializable であれば、そのオブジェクトが実際にシリアライズできます。
-
-また Scala において case class や case object を使うと、そのクラスは Serializable が自動的に mixin されます。
-この挙動は普段あまり意識することが無いかも知れませんが、 Scala で Serializable が要求されるシーンではしばしば重要なノウハウになるでしょう。
-
-===[/column]
+このクロージャですが、 Spark など分散処理を行う際もそのパワーを発揮してくれます。
+コレクションに対して map 処理などを行うコードを多く書くことがあり、その際にクロージャを用いると処理内容を気軽に記述出来るためです。
+しかしながらクロージャは自由変数を参照可能なゆえ、しばしばデバッグし難いシリアライズ不可能な状況を作りえます。
+本誌ではここから、クロージャとシリアライズの問題に対して深掘りしてゆきます。
 
 
-== Scala のクロージャのシリアライズについて
+== Scala のクロージャのシリアライズ問題: 簡単なケース
 
 どのような時にクロージャがシリアライズできなくなるのでしょうか。
 ここではいくつかのクロージャの記述方法を比較しながらその動作の差異を確認してみます。
@@ -145,7 +152,7 @@ object DefaultSerializer extends Serializer {
 //}
 
 もしシリアライズ可能でないクロージャを serialize() に投げ込んだら、例外が起こるはずです。
-ここでは Scalatest で例外が起こるかどうかをチェックできるようにしておきます。
+ここでは ScalaTest @<fn>{scalatest} で例外が起こるかどうかをチェックできるようにしておきます。
 
 //source[assert_serialize.scala]{
 import org.scalatest.{FlatSpec, Matchers}
@@ -165,12 +172,14 @@ class ClosureSpec extends FlatSpec with Matchers {
 //}
 
 //footnote[kryo][Kryo: https://github.com/EsotericSoftware/kryo]
+//footnote[scalatest][ScalaTest: http://www.scalatest.org/]
 
 === 簡単なシリアライズ可能な場合
 
 簡単なケースから確認していきましょう。
 
 まず自由変数を何も参照しない、更に何も引数に取らないクロージャを考えます。
+戻り値としては定数 1 を返すだけ、シンプルです。
 これは特に問題なくシリアライズ可能です。
 
 //source[serializable01.scala]{
@@ -183,6 +192,7 @@ class ClosureSpec extends FlatSpec with Matchers {
 //}
 
 次に引数を取るようにしてみます。
+それ以外の変更はありません。
 これもシリアライズ可能です。
 
 //source[serializable02.scala]{
@@ -207,7 +217,7 @@ class ClosureSpec extends FlatSpec with Matchers {
     assertSerializable(closure, true)  // serializable!
 //}
 
-localValue の値を外のブロックで一度定義した後 localValue に代入した場合でも同様です。
+localValue の値を外のブロックで一度定義した後、 localValue に代入した場合でも同様です。
 
 //source[serializable04.scala]{
 class ClosureSpec extends FlatSpec with Matchers {
@@ -248,7 +258,7 @@ class NonSerializable(id: Int) {  // Serializable を継承していない！
 対して、シリアライズ不可能になるのはどんなケースでしょうか？
 まずは通りそうで通らないケースから触れてみます。
 
-シリアライズ可能な、 Serializable でないクラスのメンバを参照するクロージャがまずシリアライズ不可能です。
+まず、シリアライズ可能な、 Serializable でないクラスのメンバを参照するクロージャがシリアライズ不可能です。
 前述の例で localValue として一度同じスコープで再定義した場合にはシリアライズ可能だったことを思い出すと、直感的でないと感じる方もいるかも知れません。
 
 //source[nonserializable01.scala]{
@@ -283,11 +293,14 @@ class ClosureSpec extends FlatSpec with Matchers {
     assertSerializable(closure4, false)  // not serializable...
 //}
 
-=== 簡単なシリアライズ不可能なケースの対処法
+この様な記述はクラスのメンバにロガー変数などを持たせて引き回す際などに混入してしまいそうです。
+さて、この問題に直面した際にどうしましょうか。
 
-このシリアライズ不可能なケース、うっかりこうしたコードを書いてしまいそうですね。
+== シリアライズ不可能なケースの対処法
+
+シリアライズ不可能なケース、うっかりこうしたコードを書いてしまいそうですね。
 手っ取り早いシリアライズ可能にする方法はあるのでしょうか？
-ここでは 2 種類の回避方法を紹介します。
+ここでは 3 種類の回避方法を紹介します。
 
 １つ目は、可能であれば参照先メンバを object で定義したシングルトンオブジェクトに持たせてしまうことです。
 例えば以下のようにしてシリアライズ可能にできます。
@@ -422,7 +435,9 @@ public final class MyClosure$ {
 }
 //}
 
-Scala のコードから生成したクラスファイルのデコンパイル結果は様々な付加情報があるため、動作確認が難しいです。
+Scala のコードから生成したクラスファイルのデコンパイル結果は様々な付加情報があるため、動作確認が困難です。
+果たしてこの Java のコードで、 Scala で起こり得たようなシリアライズの問題は再現できるのでしょうか。
+
 ここでは更に、シングルトンオブジェクトを参照することでシリアライズ可能にするシンプルな Java のコードも直接書いて確認してみました。
 以下の例において serialize() はシリアライズが可能なのですが、やはり notSerializable() ではシリアライズに失敗します。
 
@@ -493,7 +508,11 @@ class DefaultSerializer {
 
 //}
 
+@<comment>{textlint-disable}
+
 //footnote[fernflower][Fernflower: https://github.com/JetBrains/intellij-community/tree/master/plugins/java-decompiler/engine]
+
+@<comment>{textlint-enable}
 
 話を戻して、シリアライズ可能にする方法の 2つ目は、 Serializable でないクラスのメンバを直接参照せずブロック内で再定義しておくケースです。
 メンバがもともと Serializable な型であればこれで回避可能です。
@@ -518,6 +537,7 @@ class ClosureSpec extends FlatSpec with Matchers {
   ...
 //}
 
+この解決方法は、変数を再定義する都合ややコードがエレガントでなくなる気がするものの、とても簡単な解決方法だと言えそうです。
 余談ですが、ここでクラスのメンバを遅延評価するとシリアライズ不可能になってしまいます。
 
 //source[to_nonserializable01.scala]{
@@ -540,7 +560,70 @@ class ClosureSpec extends FlatSpec with Matchers {
   ...
 //}
 
-=== 複雑なシリアライズ可能なケース
+最後に紹介するケースは考え方はシンプルです。
+Serializable でないクラスのメンバを参照したせいでシリアライズに失敗したのなら、 Serializable なクラスのメンバを参照するようにしてみます。
+やや偏った意図を含むコードになりますが、以下のような case class に参照したいメンバを持たせておきます。
+class ではなく case class を使ってクラスを定義するため、 Serializable は自動的に mixin されます。
+
+//source[to_serializable03_01.scala]{
+class ClosureSpec extends FlatSpec with Matchers {
+  ...
+
+  import ClosureSpec._
+
+  it should "serializable" in {
+    ...
+    val maybeSerializable = MaybeSerializable()
+    val closure10 = () => maybeSerializable.someSerializableValue
+    val closure11 = () => maybeSerializable.someSerializableMethod()
+    val closure12 = () => maybeSerializable.someNonSerializableValue
+    val closure13 = () => maybeSerializable.someNonSerializableMethod()
+    assertSerializable(closure10, true)  // not serializable...
+    assertSerializable(closure11, true)  // not serializable...
+    assertSerializable(closure12, true)  // not serializable...
+    assertSerializable(closure13, true)  // not serializable...
+    ...
+  }
+  ...
+}
+...
+case class MaybeSerializable() { // Serializable!
+  val someSerializableValue = 1
+  val someNonSerializableValue = new NonSerializable()
+  def someSerializableMethod() = 1
+  def someNonSerializableMethod() = new NonSerializable()
+}
+//}
+
+上手く行きそうなこのコードですが、残念ながらシリアライズに失敗します。
+原因は someNonSerializableValue メンバです。
+このメンバが Serializable でないため、 MaybeSerializable クラス全体のシリアライズが失敗するわけです。
+
+MaybeSerializable クラスを Serializable になるよう作り変えるのも 1 つの手段ですが、 Scala ではこの問題を回避する他の手段があります。
+それが @transient lazy val パターン @<fn>{transient_lazy_val} を使うものです。
+以下のように MaybeSerializable クラスを修正すれば、シリアライズ可能になります。
+
+//source[to_serializable03_02.scala]{
+case class MaybeSerializable() { // Serializable!
+  val someSerializableValue = 1
+  @transient lazy val someNonSerializableValue = new NonSerializable()
+  def someSerializableMethod() = 1
+  def someNonSerializableMethod() = new NonSerializable()
+}
+//}
+
+@transient はシリアライズの対象からメンバを除外するアノテーションです。
+これを付与したことで MaybeSerializable クラスがシリアライズ可能になります。
+しかしながらこれだと someNonSerializableValue メンバに参照した際に null が返却されてしまいます。
+そこで lazy val で遅延評価を行うと、実際にそのメンバが参照されるデシリアライズ後に評価がされるので値を利用できるわけです。
+
+@<comment>{textlint-disable}
+
+//footnote[transient_lazy_val][@transient lazy val pattern: https://nathankleyn.com/2017/12/29/using-transient-and-lazy-vals-to-avoid-spark-serialisation-issues/]
+
+@<comment>{textlint-enable}
+
+== Scala のクロージャのシリアライズ問題: 複雑なケース
 
 やや複雑な例を提示してみます。
 このようにブロックがネストしていたり、クロージャをネストして呼び出していても、個別のブロック、クロージャが Serializable であればシリアライズが可能です。
@@ -583,7 +666,7 @@ class ClosureSpec extends FlatSpec with Matchers {
 
 一方でネストしたブロック、クロージャからシリアライズ不可能な値を参照すると、やはりクロージャ全体がシリアライズ不可能になります。
 
-この例は、本誌のように順序立ててシリアライズ可能性について注意深く検証していればどうしてシリアライズ出来ないのか特定するのは簡単でしょう。
+この例は、本誌のように順序立ててシリアライズ可能性について注意深く検証していればどうしてシリアライズ出来ないのか特定するのは簡単かも知れません。
 しかしながら実世界で、ある関数を自作していてその後 closure3 のようにそれを呼び出すだけのクロージャを作った上で、シリアライズを要求する処理を組み立てたらどうでしょうか？
 コードの複雑性にもよるでしょうが、シリアライズが失敗する原因を特定するのが難しくなる場合もあるでしょう。
 
