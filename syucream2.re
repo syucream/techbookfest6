@@ -39,7 +39,7 @@ Hadoop エコシステムは多くの場合 JVM を実行環境としており�
 Apache Spark, あるいは Apache Beam @<fn>{apache_beam} などで分散処理を記述する場合、各処理が Serializable であることを要求されます。
 これは @<img>{syucream2_serialized_tasks} のようなイメージで各処理をシリアライズして各ワーカに配布して分散処理が可能にするためです。
 
-//image[syucream2_serialized_tasks][分散処理とシリアライズ][scale=0.8]
+//image[syucream2_serialized_tasks][分散処理とシリアライズ][scale=0.7]
 
 ただしこの Serializable の担保は余程気をつけてコーディングしないとハマることが多々あると思われます。
 特に後述する Scala のクロージャのような機構を使用する場合には、 Serializable にするにはどうすればいいのか、そもそも何が原因で Serializable にならないのかを確認するのが困難になることもあるでしょう。
@@ -117,7 +117,7 @@ case class MyLogger() {
 本誌ではここから、クロージャとシリアライズの問題に対して深掘りしてゆきます。
 
 
-== Scala のクロージャのシリアライズ問題: 簡単なケース
+== クロージャシリアライズ問題: 簡単なケース
 
 どのような時にクロージャがシリアライズできなくなるのでしょうか。
 ここではいくつかのクロージャの記述方法を比較しながらその動作の差異を確認してみます。
@@ -623,7 +623,7 @@ case class MaybeSerializable() { // Serializable!
 
 @<comment>{textlint-enable}
 
-== Scala のクロージャのシリアライズ問題: 複雑なケース
+== クロージャシリアライズ問題: 複雑なケース
 
 やや複雑な例を提示してみます。
 このようにブロックがネストしていたり、クロージャをネストして呼び出していても、個別のブロック、クロージャが Serializable であればシリアライズが可能です。
@@ -705,8 +705,8 @@ class ClosureSpec extends FlatSpec with Matchers {
 
 ===[column] Scala 2.12 とクロージャ、そして ClosureCleaner
 
-おそらく現在ひろく使われているであろう Scala 2.12 とその前の Scala 2.11 の間には無名関数における変更が入っています。
-主要な点として、無名関数のとる型 FunctionN が SAM(Single Abstract Method, メソッドが 1 つしかない abstract class) となったことが挙げられます。
+Scala 2.12 とその前の Scala 2.11 の間には無名関数における変更が入っています。
+無名関数のとる型 FunctionN が SAM(Single Abstract Method, メソッドが 1 つしかない abstract class) となったのです。
 これにより Java8 と Scala の互換性が高まりました。
 
 加えて、 Scala 2.12 ではクロージャのキャプチャの挙動に以下のような変更が入っています。
@@ -716,32 +716,14 @@ class ClosureSpec extends FlatSpec with Matchers {
 
 不要な参照を除外することによって、シリアライズ後のバイナリサイズを削減し、予期せぬシリアライズの失敗を避けることができます。
 またメソッドはインスタンスメンバへの参照を持つため、シリアライズの失敗を招く可能性があるのですが、これが解消されました。
-例えば Scala 2.11 以下ではこのようなローカルメソッドをキャプチャするクロージャのシリアライズには失敗していました。
 
-//source[localdef.scala]{
-class ClosureSpec extends FlatSpec with Matchers {
-  ...
-
-  import ClosureSpec._
-
-  it should "serializable" in {
-    ...
-    def a = 1
-    val closure = (x: Int) => x + a
-
-    assertSerializable(closure, false)  // not serializable...
-//}
-
-Apache Spark では以前より、このようなシリアライズに関する問題の緩和策として、 ClosureCleaner @<fn>{closurecleaner} というクロージャをクリンナップする仕組みを設けていました。
-ちなみにこれと同じ機構が Twitter の Chill @<fn>{chill} ライブラリや Apache Flink @<fn>{flink} にも存在するようです。
+ちなみに Apache Spark では以前より、このシリアライズに関する問題の緩和策として、 ClosureCleaner @<fn>{closurecleaner} というクロージャをクリンナップする仕組みを設けていました。
 
 ===[/column]
 
 //footnote[scala212][Scala 2.12: https://www.scala-lang.org/news/2.12.0/]
 //footnote[scala212_lambda_capturing][Scala 2.12 lambda: https://www.scala-lang.org/news/2.12.0/#lambdas-capturing-outer-instances]
 //footnote[closurecleaner][ClosureCleaner: https://www.quora.com/Apache-Spark/What-does-Closure-cleaner-func-mean-in-Spark]
-//footnote[chill][chill: https://github.com/twitter/chill]
-//footnote[flink][Apache Flink: https://flink.apache.org/]
 
 == おわりに
 
